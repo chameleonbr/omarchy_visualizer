@@ -1,0 +1,358 @@
+// Checks for Visualizer.js: the cava config, the frames, the smoothing, the
+// palettes, the shapes and the WLED bridge.
+//
+// Run with `node test_visualizer.js`. No audio, no cava, no network.
+//
+// `.pragma library` is a QML directive rather than JavaScript, so it is stripped
+// before eval. It has to be in the file: without it each importing QML file
+// gets its own copy of the module.
+
+const assert = require("assert")
+const fs = require("fs")
+
+eval(fs.readFileSync(__dirname + "/Visualizer.js", "utf8").replace(/^\.pragma .*$/gm, ""))
+
+let passed = 0
+function check(name, run) {
+  try {
+    run()
+    passed++
+  } catch (error) {
+    console.error("FAIL " + name + "\n  " + error.message)
+    process.exitCode = 1
+  }
+}
+
+// ---------------------------------------------------------- cava config
+
+check("the config asks for what the widget draws", () => {
+  const text = cavaConfig({ barCount: 18, framerate: 45 })
+  assert.ok(text.indexOf("bars = 18") > 0)
+  assert.ok(text.indexOf("framerate = 45") > 0)
+  assert.ok(text.indexOf("method = raw") > 0)
+  assert.ok(text.indexOf("data_format = ascii") > 0, "ascii: no binary, no endianness")
+  assert.ok(text.indexOf("autosens = 1") > 0, "cava does its own gain")
+  assert.ok(text.indexOf("channels = mono") > 0)
+})
+
+check("settings outside their range are clamped, not obeyed", () => {
+  const wild = cavaConfig({ barCount: 500, framerate: 500 })
+  assert.ok(wild.indexOf("bars = 24") > 0)
+  assert.ok(wild.indexOf("framerate = 60") > 0)
+
+  const tiny = cavaConfig({ barCount: 0, framerate: 0 })
+  assert.ok(tiny.indexOf("bars = 14") > 0, "zero means unset, not zero bars")
+  assert.ok(tiny.indexOf("framerate = 30") > 0)
+})
+
+check("the config is written where it cannot clobber the user's", () => {
+  // ~/.config/cava belongs to whoever runs cava in a terminal.
+  const path = configPath("/run/user/1000")
+  assert.ok(path.indexOf("/run/user/1000") === 0)
+  assert.ok(path.indexOf(".config/cava") < 0)
+  assert.ok(configPath("").indexOf("/tmp") === 0, "a fallback, not a crash")
+})
+
+check("cava is run against that config, and never installed", () => {
+  assert.deepStrictEqual(cavaCommand("/run/x/cava.conf"), ["cava", "-p", "/run/x/cava.conf"])
+
+  const probe = cavaCheckCommand().join(" ")
+  assert.ok(probe.indexOf("command -v cava") > 0)
+  assert.ok(probe.indexOf("install") < 0 && probe.indexOf("pacman") < 0,
+    "the plugin says what is missing; it does not go and get it")
+})
+
+// --------------------------------------------------------------- frames
+
+check("a frame is N numbers and nothing else", () => {
+  assert.deepStrictEqual(parseFrame("0;12;45;98;3", 5), [0, 12, 45, 98, 3])
+  assert.deepStrictEqual(parseFrame("  0;12;45;98;3  ", 5), [0, 12, 45, 98, 3])
+})
+
+check("a short frame is padded and a long one is trimmed", () => {
+  // cava is restarted when barCount changes; for the frame in between, a short
+  // draw beats a stall.
+  assert.deepStrictEqual(parseFrame("10;20", 5), [10, 20, 0, 0, 0])
+  assert.deepStrictEqual(parseFrame("1;2;3;4;5;6;7", 3), [1, 2, 3])
+})
+
+check("a partial line is dropped, not read as silence", () => {
+  // Returning zeros would draw a flat bar that looks like the music stopped.
+  assert.strictEqual(parseFrame("10;abc", 5), null)
+  assert.strictEqual(parseFrame("", 5), null)
+  assert.strictEqual(parseFrame("   ", 5), null)
+})
+
+check("values are clamped to the range the config asked for", () => {
+  assert.deepStrictEqual(parseFrame("-5;150", 2), [0, 100])
+})
+
+// ------------------------------------------------------------- smoothing
+
+check("attack is immediate and release is eased", () => {
+  // Matching the attack is what makes it look connected to the sound; easing
+  // the release is what stops it looking like noise.
+  assert.deepStrictEqual(smoothFrame([0, 0], [100, 100], 60), [100, 100])
+
+  const falling = smoothFrame([100, 100], [0, 0], 60)
+  assert.ok(falling[0] > 0 && falling[0] < 100)
+  assert.strictEqual(falling[0], 60)
+})
+
+check("smoothing at either end behaves", () => {
+  assert.deepStrictEqual(smoothFrame([100], [0], 0), [0], "0 means no easing at all")
+
+  const slow = smoothFrame([100], [0], 95)
+  assert.strictEqual(slow[0], 95)
+
+  for (const value of [-10, 200, NaN]) {
+    const out = smoothFrame([100], [0], value)
+    assert.ok(isFinite(out[0]), "smoothing " + value)
+  }
+})
+
+check("a change of bar count restarts cleanly", () => {
+  // Different length means cava was restarted; the old frame is not comparable.
+  assert.deepStrictEqual(smoothFrame([1, 2, 3], [9, 9], 60), [9, 9])
+  assert.deepStrictEqual(smoothFrame(null, [9, 9], 60), [9, 9])
+})
+
+check("a floor lets the widget rest", () => {
+  // Room noise keeps the bars trembling at one or two forever, and with the
+  // bridge on it keeps a lamp flickering all night.
+  assert.deepStrictEqual(applyFloor([0, 2, 3, 40], 3), [0, 0, 3, 40])
+  assert.deepStrictEqual(applyFloor([1, 2], 0), [1, 2], "no floor, no change")
+})
+
+check("the first frames are dropped while autosens calibrates", () => {
+  assert.strictEqual(isWarmup(0), true)
+  assert.strictEqual(isWarmup(9), true)
+  assert.strictEqual(isWarmup(10), false)
+})
+
+// --------------------------------------------------------- energy guards
+
+check("the truth table of when it runs", () => {
+  const base = {
+    installed: true, visible: true, playing: true, onBattery: false,
+    pauseWhenSilent: true, pauseOnBattery: true
+  }
+  const with_ = extra => Object.assign({}, base, extra)
+
+  assert.strictEqual(shouldRun(base), true)
+  assert.strictEqual(shouldRun(with_({ installed: false })), false)
+  assert.strictEqual(shouldRun(with_({ visible: false })), false)
+  assert.strictEqual(shouldRun(with_({ playing: false })), false)
+  assert.strictEqual(shouldRun(with_({ onBattery: true })), false)
+
+  // Both guards can be turned off, and then they do not apply.
+  assert.strictEqual(shouldRun(with_({ playing: false, pauseWhenSilent: false })), true)
+  assert.strictEqual(shouldRun(with_({ onBattery: true, pauseOnBattery: false })), true)
+})
+
+check("not running is explained, because nothing is not an error", () => {
+  const base = {
+    installed: true, visible: true, playing: true, onBattery: false,
+    pauseWhenSilent: true, pauseOnBattery: true
+  }
+  assert.strictEqual(idleReason(base), "")
+  assert.strictEqual(idleReason(Object.assign({}, base, { installed: false })), "missing")
+  assert.strictEqual(idleReason(Object.assign({}, base, { playing: false })), "silent")
+  assert.strictEqual(idleReason(Object.assign({}, base, { onBattery: true })), "battery")
+})
+
+check("a missing cava outranks every other reason", () => {
+  // Telling someone the music is stopped when the program is not installed
+  // sends them looking in the wrong place.
+  assert.strictEqual(idleReason({
+    installed: false, visible: false, playing: false, onBattery: true,
+    pauseWhenSilent: true, pauseOnBattery: true
+  }), "missing")
+})
+
+// --------------------------------------------------------------- shapes
+
+check("every shape in the settings is a shape the renderer knows", () => {
+  assert.deepStrictEqual(SHAPES, ["bars", "mirror", "blocks", "dots", "wave"])
+  for (const shape of SHAPES) assert.ok(isShape(shape), shape)
+  assert.strictEqual(isShape("spiral"), false)
+})
+
+check("blocks light both ends exactly", () => {
+  assert.strictEqual(litSegments(0, 8), 0, "silence lights none")
+  assert.strictEqual(litSegments(100, 8), 8, "full lights all")
+  assert.strictEqual(litSegments(50, 8), 4)
+  assert.strictEqual(litSegments(100, 1), 1)
+})
+
+check("the wave spans the width and inverts for the screen", () => {
+  const points = wavePoints([0, 50, 100])
+  assert.strictEqual(points[0].x, 0)
+  assert.strictEqual(points[2].x, 1)
+  assert.strictEqual(points[0].y, 1, "silence sits on the floor")
+  assert.strictEqual(points[2].y, 0, "full reaches the top")
+  assert.strictEqual(points[1].y, 0.5)
+
+  assert.strictEqual(wavePoints([42])[0].x, 0.5, "a single point is centred, not at zero")
+})
+
+// -------------------------------------------------------------- palettes
+
+// Colours are compared with a tolerance: mixing at either extreme lands on
+// 0.19999999999999996 rather than on 0.2, and a test that cares about that is
+// testing IEEE 754 rather than the palette.
+function sameColor(a, b, message) {
+  for (const channel of ["r", "g", "b"]) {
+    assert.ok(Math.abs(a[channel] - b[channel]) < 1e-9,
+      (message || "") + " " + channel + ": " + a[channel] + " vs " + b[channel])
+  }
+}
+
+const CTX = {
+  foreground: { r: 0.8, g: 0.8, b: 0.8 },
+  accent: { r: 0.2, g: 0.6, b: 0.9 },
+  urgent: { r: 0.9, g: 0.2, b: 0.2 },
+  peakThreshold: 85
+}
+
+check("every palette returns a colour for silence, middle and full", () => {
+  for (const palette of PALETTES) {
+    for (const value of [0, 50, 100]) {
+      const color = paletteColor(palette, 1, 8, value, CTX)
+      for (const channel of ["r", "g", "b"]) {
+        assert.ok(isFinite(color[channel]) && color[channel] >= 0 && color[channel] <= 1,
+          palette + " at " + value + " channel " + channel)
+      }
+    }
+  }
+})
+
+check("intensity moves with the sound, between the two theme colours", () => {
+  const quiet = paletteColor("intensity", 0, 8, 0, CTX)
+  const loud = paletteColor("intensity", 0, 8, 100, CTX)
+
+  sameColor(quiet, CTX.foreground, "silence is the foreground")
+  sameColor(loud, CTX.accent, "full is the accent")
+})
+
+check("urgent crosses at the threshold and comes back", () => {
+  sameColor(paletteColor("urgent", 0, 8, 84, CTX), CTX.accent, "below")
+  sameColor(paletteColor("urgent", 0, 8, 85, CTX), CTX.urgent, "at")
+  sameColor(paletteColor("urgent", 0, 8, 60, CTX), CTX.accent, "back below")
+})
+
+check("spectrum sweeps by position and does not repeat the ends", () => {
+  const first = paletteColor("spectrum", 0, 8, 50, CTX)
+  const last = paletteColor("spectrum", 7, 8, 50, CTX)
+  const distance = Math.abs(first.r - last.r) + Math.abs(first.g - last.g) + Math.abs(first.b - last.b)
+
+  assert.ok(distance > 0.1, "the two ends are different colours")
+})
+
+check("spectrum keeps the theme's saturation", () => {
+  // Otherwise a muted theme gets a rainbow that belongs to some other desktop.
+  const muted = Object.assign({}, CTX, { accent: { r: 0.5, g: 0.5, b: 0.5 } })
+  const color = paletteColor("spectrum", 3, 8, 50, muted)
+
+  const max = Math.max(color.r, color.g, color.b)
+  const min = Math.min(color.r, color.g, color.b)
+  assert.ok(max - min < 0.05, "a grey accent stays grey")
+})
+
+check("gradient runs between the two given colours", () => {
+  const ctx = Object.assign({}, CTX, {
+    gradientFrom: { r: 1, g: 0, b: 0 },
+    gradientTo: { r: 0, g: 0, b: 1 }
+  })
+
+  sameColor(paletteColor("gradient", 0, 3, 50, ctx), { r: 1, g: 0, b: 0 }, "from")
+  sameColor(paletteColor("gradient", 2, 3, 50, ctx), { r: 0, g: 0, b: 1 }, "to")
+})
+
+check("a bad hex falls back to the theme rather than to nothing", () => {
+  const broken = Object.assign({}, CTX, { gradientFrom: null, gradientTo: null })
+  sameColor(paletteColor("gradient", 0, 3, 50, broken), CTX.accent, "fallback")
+
+  assert.strictEqual(parseHex("nonsense"), null)
+  assert.strictEqual(parseHex(""), null)
+  assert.strictEqual(parseHex("#12345"), null)
+})
+
+check("hex parses in both lengths", () => {
+  assert.deepStrictEqual(parseHex("#ffffff"), { r: 1, g: 1, b: 1 })
+  assert.deepStrictEqual(parseHex("000000"), { r: 0, g: 0, b: 0 })
+  assert.deepStrictEqual(parseHex("#fff"), { r: 1, g: 1, b: 1 })
+})
+
+check("an unknown palette is the accent, not a crash", () => {
+  sameColor(paletteColor("nonsense", 0, 8, 50, CTX), CTX.accent, "unknown")
+})
+
+// ------------------------------------------------------------ WLED bridge
+
+check("brightness follows the mean, not the peak", () => {
+  // Tracking the peak makes the lamp follow the kick drum alone, which reads as
+  // strobing rather than as the music.
+  assert.strictEqual(frameEnergy([0, 0, 0, 100]), 0.25)
+  assert.strictEqual(frameEnergy([100, 100]), 1)
+  assert.strictEqual(frameEnergy([]), 0)
+  assert.strictEqual(frameEnergy(null), 0)
+})
+
+check("brightness is monotonic and stays in range", () => {
+  let previous = -1
+  for (let energy = 0; energy <= 1.0001; energy += 0.1) {
+    const bri = wledBrightness(energy, 0, 255)
+    assert.ok(bri >= 0 && bri <= 255)
+    assert.ok(bri >= previous, "never goes down as the music gets louder")
+    previous = bri
+  }
+  assert.strictEqual(wledBrightness(0, 0, 255), 0)
+  assert.strictEqual(wledBrightness(1, 0, 255), 255)
+})
+
+check("frames above the rate are dropped, never queued", () => {
+  // WLED over HTTP cannot take 30 requests a second: the lamp stops answering
+  // and looks like a hardware fault. A queue would move that to the end of the
+  // song rather than avoid it.
+  assert.strictEqual(shouldSendToWled(0, 100, 10), true, "100ms at 10Hz")
+  assert.strictEqual(shouldSendToWled(0, 99, 10), false)
+  assert.strictEqual(shouldSendToWled(0, 50, 20), true)
+  assert.strictEqual(shouldSendToWled(0, 1000, 1), true)
+})
+
+check("the rate is clamped where the hardware can follow", () => {
+  // Asking for 1000Hz gets 20Hz, which is one frame every 50ms.
+  assert.strictEqual(shouldSendToWled(0, 49, 1000), false, "49ms is too soon even at the cap")
+  assert.strictEqual(shouldSendToWled(0, 50, 1000), true)
+  assert.strictEqual(shouldSendToWled(0, 999, 0), true, "zero means the default")
+})
+
+check("the lamp shows the colour the bar is showing", () => {
+  const loud = wledColor("intensity", 1, CTX)
+  const quiet = wledColor("intensity", 0, CTX)
+
+  sameColor(loud, CTX.accent, "loud")
+  sameColor(quiet, CTX.foreground, "quiet")
+})
+
+check("the payload is the WLED state API and nothing exotic", () => {
+  const payload = JSON.parse(wledPayload(128, { r: 1, g: 0, b: 0.5 }))
+
+  assert.strictEqual(payload.on, true)
+  assert.strictEqual(payload.bri, 128)
+  assert.deepStrictEqual(payload.seg[0].col[0], [255, 0, 128])
+})
+
+check("the restore puts the lamp back, and says so plainly when it cannot", () => {
+  // Leaving a lamp frozen on a colour after the music stops is the worst thing
+  // this bridge can do.
+  const restored = JSON.parse(wledRestorePayload({ on: true, bri: 200, seg: [{ col: [[1, 2, 3]] }] }))
+  assert.strictEqual(restored.bri, 200)
+  assert.deepStrictEqual(restored.seg[0].col[0], [1, 2, 3])
+
+  const unknown = JSON.parse(wledRestorePayload(null))
+  assert.strictEqual(unknown.on, false, "nothing remembered: turn it off rather than guess")
+})
+
+console.log(passed + " checks passed")
