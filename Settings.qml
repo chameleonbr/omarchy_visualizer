@@ -182,6 +182,10 @@ Item {
             }
 
             Text {
+              // Plain, not AutoText: a value can be a name someone typed into
+              // another plugin's config, and AutoText would sniff it for
+              // markup and render whatever it found.
+              textFormat: Text.PlainText
               text: root.trValue(modelData.key, parent.parent.current)
               color: Color.accent
               font.family: Style.font.family
@@ -252,6 +256,7 @@ Item {
                 // An empty setting says so rather than showing a swatch of the
                 // colour it would fall back to, which would read as a choice
                 // someone made.
+                textFormat: Text.PlainText
                 text: parent.parent.parent.value || root.tr("settings.themed")
                 color: Qt.darker(Color.foreground, 1.6)
                 font.family: Style.font.family
