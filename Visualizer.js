@@ -380,10 +380,11 @@ function cycle(values, current, direction) {
 // combine, so "bars with round caps and a peak marker" and "a segmented ring"
 // are the same three settings arranged differently.
 
-// How the stage sits on screen. `float` is a card the size of its own content;
-// `fill` takes the whole usable area — everything the bar is not already
-// claiming, since a layer surface respects the exclusive zones around it.
-var MODES = ["float", "fill"]
+// What kind of window the stage is. `float` is a layer-shell card the size of
+// its own content, hovering over everything. `tile` is a real toplevel the
+// compositor tiles like any other window — the only way to both fill the whole
+// tile and stack with the neighbours instead of covering them.
+var MODES = ["float", "tile"]
 
 function isMode(name) {
   return MODES.indexOf(name) >= 0

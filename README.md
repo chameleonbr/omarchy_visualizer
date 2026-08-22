@@ -76,15 +76,21 @@ Click the widget and the spectrum gets a window of its own.
 
 | Key | What it does |
 |---|---|
-| `f` | switches the window between `float` and `fill` |
+| `f` | switches the window between `float` and `tile` |
 | `s` | settings, beside the spectrum |
 | `esc` | steps back one layer — out of the settings, then closed |
 
-`float` is a card the size of its own content — the rest of the screen belongs
-to whatever was already there and stays clickable. `fill` takes the whole
-usable area: the screen minus whatever the bar already claims, because a layer
-surface respects the exclusive zones around it. Neither one leaves a margin of
-its own, and the mode is a setting, so it survives closing the window.
+`float` is a layer-shell card the size of its own content: it hovers over
+everything and the desktop underneath stays clickable. Good for a glance.
+
+`tile` is a real window. The compositor tiles it like any other, which is the
+only way to get the two things a layer surface cannot give — it fills the whole
+tile it was handed, and it stacks with its neighbours instead of sitting
+permanently in front of them. Every window keybind you already have works on
+it.
+
+The mode is a setting rather than a passing state, so it survives closing the
+window.
 
 The settings open **beside** the spectrum, not over it — every control in them
 is previewed by the visualiser next to it, so covering it would defeat the
@@ -107,7 +113,7 @@ It can be bound too:
 
 ```bash
 omarchy-shell avila.visualizer toggle
-omarchy-shell avila.visualizer fill
+omarchy-shell avila.visualizer tile
 omarchy-shell avila.visualizer settings
 ```
 

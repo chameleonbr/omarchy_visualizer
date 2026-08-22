@@ -121,10 +121,10 @@ BarWidget {
 
     function open(): void { stage.open() }
     function close(): void { stage.close() }
-    function toggle(): void { stage.visible ? stage.close() : stage.open() }
-    function fill(): void {
+    function toggle(): void { stage.shown ? stage.close() : stage.open() }
+    function tile(): void {
       stage.open()
-      if (!stage.filling) stage.toggleMode()
+      if (!stage.tiled) stage.toggleMode()
     }
     function settings(): void {
       stage.open()

@@ -46,10 +46,10 @@
         "key": "mode",
         "type": "string",
         "label": "Stage window",
-        "description": "float is a card the size of its content; fill takes the whole usable area.",
+        "description": "float is a layer-shell card over everything; tile is a real window the compositor tiles.",
         "options": [
           "float",
-          "fill"
+          "tile"
         ],
         "defaultValue": "float"
       },

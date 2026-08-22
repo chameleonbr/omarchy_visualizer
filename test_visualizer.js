@@ -585,21 +585,21 @@ check("nothing in the audio path needs root", () => {
 // ---------------------------------------------------------------- stage mode
 
 check("two ways for the stage to sit on screen", () => {
-  assert.deepStrictEqual(MODES, ["float", "fill"])
-  assert.ok(isMode("fill"))
+  assert.deepStrictEqual(MODES, ["float", "tile"])
+  assert.ok(isMode("tile"))
   assert.ok(!isMode("fullscreen"), "the old name is gone, not silently accepted")
 })
 
 check("a plugin does not take the screen uninvited", () => {
   assert.strictEqual(DEFAULTS.mode, "float")
-  assert.strictEqual(mergeSettings({}, { mode: "fill" }).mode, "fill",
+  assert.strictEqual(mergeSettings({}, { mode: "tile" }).mode, "tile",
     "the mode is a setting, so it survives closing the window")
 })
 
 check("the mode cycles both ways", () => {
-  assert.strictEqual(cycle(MODES, "float", 1), "fill")
-  assert.strictEqual(cycle(MODES, "fill", 1), "float")
-  assert.strictEqual(cycle(MODES, "fill", -1), "float")
+  assert.strictEqual(cycle(MODES, "float", 1), "tile")
+  assert.strictEqual(cycle(MODES, "tile", 1), "float")
+  assert.strictEqual(cycle(MODES, "tile", -1), "float")
   assert.strictEqual(cycle(MODES, "nonsense", 1), "float",
     "an unreadable mode lands on the one that leaves the desktop alone")
 })

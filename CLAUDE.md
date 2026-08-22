@@ -40,7 +40,8 @@ network. `.pragma library` is stripped before `eval`; it has to stay in the file
 manifest.json    kinds: service + bar-widget
 Service.qml      one per session: cava, the guards, the WLED bridge, settings
 Panel.qml        one per monitor: the bar widget, and it owns the Stage
-Stage.qml        the big window: float/fill, keys, the settings pane
+Stage.qml        picks the window: a layer-shell card or a real toplevel
+StageBody.qml    what either one draws: spectrum, keys, the settings pane
 Settings.qml     the overlay itself
 Spectrum.qml     the drawing, and nothing else
 Visualizer.js    all the logic, and the only part with tests
@@ -109,7 +110,8 @@ Visualizer.js    all the logic, and the only part with tests
 - **Windowed, the stage is the size of its own content.** A layer surface
   covering the screen swallows every click even when it is fully transparent,
   so the earlier full-screen scrim made the desktop unusable while the
-  visualiser was open. Only `fill` anchors to all four edges.
+  visualiser was open. `tile` is a `FloatingWindow` instead, so the
+compositor places it and the layer rules do not apply at all.
 
 - **A popup cannot take keyboard focus.** The stage is a `PanelWindow` with
   `WlrKeyboardFocus.Exclusive`; that is what makes `f` and `s` work at all.
@@ -139,3 +141,15 @@ Visualizer.js    all the logic, and the only part with tests
 
 - **A floor is not cosmetic.** Room noise keeps the bars trembling at one or two
   forever, and with the bridge on it keeps a lamp flickering all night.
+
+**`anchors.left: cond ? undefined : parent.left` does not clear the anchor.**
+Assigning `undefined` to an anchor line from inside a binding leaves whatever
+was there — so a pane meant to switch from full-width to a right-hand sidebar
+ends up anchored to both edges at once and silently spans the window. It is a
+layout bug, not an error: nothing is logged. `StageBody.qml` sets `x`, `y`,
+`width` and `height` directly for exactly this reason.
+
+**A `FloatingWindow` and a `PanelWindow` are not two configurations of one
+window.** Switching between the stage's two modes destroys one and builds the
+other, which is why the open state and the settings state live on `Stage.qml`
+rather than inside the body: the body does not survive the switch.
