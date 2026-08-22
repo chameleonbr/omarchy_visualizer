@@ -76,9 +76,15 @@ Click the widget and the spectrum gets a window of its own.
 
 | Key | What it does |
 |---|---|
-| `f` | fullscreen |
-| `s` | settings, over the top |
-| `esc` | steps back one layer — out of the settings, then out of fullscreen, then closed |
+| `f` | switches the window between `float` and `fill` |
+| `s` | settings, beside the spectrum |
+| `esc` | steps back one layer — out of the settings, then closed |
+
+`float` is a card the size of its own content — the rest of the screen belongs
+to whatever was already there and stays clickable. `fill` takes the whole
+usable area: the screen minus whatever the bar already claims, because a layer
+surface respects the exclusive zones around it. Neither one leaves a margin of
+its own, and the mode is a setting, so it survives closing the window.
 
 The settings open **beside** the spectrum, not over it — every control in them
 is previewed by the visualiser next to it, so covering it would defeat the
@@ -101,7 +107,7 @@ It can be bound too:
 
 ```bash
 omarchy-shell avila.visualizer toggle
-omarchy-shell avila.visualizer fullscreen
+omarchy-shell avila.visualizer fill
 omarchy-shell avila.visualizer settings
 ```
 

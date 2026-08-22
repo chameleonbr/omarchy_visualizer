@@ -122,9 +122,9 @@ BarWidget {
     function open(): void { stage.open() }
     function close(): void { stage.close() }
     function toggle(): void { stage.visible ? stage.close() : stage.open() }
-    function fullscreen(): void {
+    function fill(): void {
       stage.open()
-      stage.fullscreen = true
+      if (!stage.filling) stage.toggleMode()
     }
     function settings(): void {
       stage.open()

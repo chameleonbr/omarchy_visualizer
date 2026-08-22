@@ -1,9 +1,11 @@
 // The big view.
 //
-// Windowed, it is a floating card the size of its own content: the rest of the
-// screen belongs to whatever was already there, and you can carry on clicking
-// it. Fullscreen, it takes the screen, which is the one time covering
-// everything is the point.
+// Two ways to sit on screen, and the mode is a setting rather than a passing
+// state, so it survives closing the view. `float` is a card the size of its own
+// content: the rest of the screen belongs to whatever was already there, and
+// you can carry on clicking it. `fill` takes the whole usable area — the screen
+// minus what the bar already claims, since a layer surface respects the
+// exclusive zones around it — and leaves no margin of its own.
 //
 // Keyboard focus is primed Exclusive on open and settles on OnDemand — the same
 // dance qs.Ui's KeyboardPanel does. Exclusive alone makes the compositor route
@@ -23,13 +25,19 @@ PanelWindow {
 
   property var widget: null
   readonly property var service: widget ? widget.service : null
-  property bool fullscreen: false
   property bool settingsOpen: false
+
+  // `float` is a card the size of its own content and leaves the desktop alone.
+  // `fill` takes the whole usable area — which is the screen minus whatever the
+  // bar already claims, because a layer surface respects the exclusive zones
+  // around it rather than sitting on top of them.
+  readonly property string mode: service ? service.value("mode") : "float"
+  readonly property bool filling: mode === "fill"
 
   // Settings sit beside the spectrum when there is room and underneath it when
   // there is not — over the top of it is the one place they must not be, since
   // the visualiser is the preview for every control in them.
-  readonly property bool sideBySide: fullscreen
+  readonly property bool sideBySide: filling
     || (screen ? screen.width : 1920) >= Style.space(1100)
 
   function open() {
@@ -39,8 +47,11 @@ PanelWindow {
 
   function close() {
     settingsOpen = false
-    fullscreen = false
     visible = false
+  }
+
+  function toggleMode() {
+    if (service) service.save({ mode: filling ? "float" : "fill" })
   }
 
   visible: false
@@ -49,17 +60,17 @@ PanelWindow {
   screen: widget && widget.QsWindow && widget.QsWindow.window
     ? widget.QsWindow.window.screen : null
 
-  // Fullscreen anchors to every edge. Windowed anchors to the bottom only, so
-  // the compositor centres it horizontally and the window is exactly as big as
-  // what it draws.
-  anchors.top: fullscreen
+  // Filling anchors to every edge. Floating anchors to the bottom only, so the
+  // compositor centres it horizontally and the window is exactly as big as what
+  // it draws.
+  anchors.top: filling
   anchors.bottom: true
-  anchors.left: fullscreen
-  anchors.right: fullscreen
-  margins.bottom: fullscreen ? 0 : Style.space(40)
+  anchors.left: filling
+  anchors.right: filling
+  margins.bottom: filling ? 0 : Style.space(40)
 
-  implicitWidth: fullscreen ? 0 : cardWidth
-  implicitHeight: fullscreen ? 0 : cardHeight
+  implicitWidth: filling ? 0 : cardWidth
+  implicitHeight: filling ? 0 : cardHeight
 
   readonly property int cardWidth: {
     var base = Math.min(screen ? screen.width - Style.space(80) : 900, Style.space(760))
@@ -91,17 +102,19 @@ PanelWindow {
   Rectangle {
     id: scrim
     anchors.fill: parent
-    // Only fullscreen dims the desktop. Windowed, there is nothing to dim: the
+    // Only filling dims what is behind. Floating, there is nothing to dim: the
     // window does not cover it.
-    color: root.fullscreen ? Color.background : "transparent"
-    opacity: root.fullscreen ? 0.96 : 1
+    color: root.filling ? Color.background : "transparent"
+    opacity: root.filling ? 0.96 : 1
 
     Rectangle {
       anchors.fill: parent
-      anchors.margins: root.fullscreen ? Style.space(40) : 0
-      color: root.fullscreen ? "transparent" : Color.background
-      radius: root.fullscreen ? 0 : Style.cornerRadius
-      border.width: root.fullscreen ? 0 : 1
+      // Filling means filling: no inset border, no leftover margin around the
+      // edge of the thing that was asked to take the whole area.
+      anchors.margins: 0
+      color: root.filling ? "transparent" : Color.background
+      radius: root.filling ? 0 : Style.cornerRadius
+      border.width: root.filling ? 0 : 1
       border.color: Color.popups.border
 
       // Clicking the card focuses it without closing; clicking outside cannot
@@ -167,7 +180,8 @@ PanelWindow {
           id: hint
           anchors.horizontalCenter: parent.horizontalCenter
           anchors.bottom: parent.bottom
-          text: "f  tela cheia     s  ajustes     esc  fechar"
+          text: (root.filling ? "f  flutuante" : "f  preencher")
+        + "     s  ajustes     esc  fechar"
           color: Qt.darker(Color.foreground, 1.8)
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
@@ -183,13 +197,17 @@ PanelWindow {
         visible: root.settingsOpen
 
         anchors.right: parent.right
-        anchors.bottom: parent.bottom
         anchors.top: root.sideBySide ? parent.top : undefined
+        anchors.bottom: parent.bottom
         anchors.left: root.sideBySide ? undefined : parent.left
         anchors.margins: Style.space(14)
 
         width: root.sideBySide ? Style.space(280) : undefined
-        height: root.sideBySide ? undefined : Style.space(280)
+        // Sized to what it holds when there is room to spare, so the pane does
+        // not sit half empty next to a spectrum that could have had the space.
+        height: root.sideBySide
+          ? Math.min(parent.height - Style.space(28), implicitHeight)
+          : Style.space(280)
 
         onCloseRequested: root.settingsOpen = false
       }
@@ -206,15 +224,16 @@ PanelWindow {
       if (event.key === Qt.Key_Escape) {
         // One layer at a time: escaping the settings should leave the
         // visualiser up.
+        // One layer at a time. The mode is a setting rather than a state, so
+        // escape does not silently undo it — it closes.
         if (root.settingsOpen) root.settingsOpen = false
-        else if (root.fullscreen) root.fullscreen = false
         else root.close()
         event.accepted = true
         return
       }
 
       if (event.key === Qt.Key_F) {
-        root.fullscreen = !root.fullscreen
+        root.toggleMode()
         event.accepted = true
         return
       }

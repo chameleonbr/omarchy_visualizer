@@ -295,6 +295,7 @@ function wavePoints(frame) {
 // defaults.
 
 var DEFAULTS = {
+  mode: "float",
   base: "bottom",
   cap: "flat",
   fill: "solid",
@@ -378,6 +379,15 @@ function cycle(values, current, direction) {
 // nine things to maintain and would still miss the tenth someone wants; these
 // combine, so "bars with round caps and a peak marker" and "a segmented ring"
 // are the same three settings arranged differently.
+
+// How the stage sits on screen. `float` is a card the size of its own content;
+// `fill` takes the whole usable area — everything the bar is not already
+// claiming, since a layer surface respects the exclusive zones around it.
+var MODES = ["float", "fill"]
+
+function isMode(name) {
+  return MODES.indexOf(name) >= 0
+}
 
 var BASES = ["bottom", "top", "mirror", "radial"]   // where a bar grows from
 var CAPS = ["flat", "round", "segments"]            // what its end looks like

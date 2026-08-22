@@ -40,7 +40,7 @@ network. `.pragma library` is stripped before `eval`; it has to stay in the file
 manifest.json    kinds: service + bar-widget
 Service.qml      one per session: cava, the guards, the WLED bridge, settings
 Panel.qml        one per monitor: the bar widget, and it owns the Stage
-Stage.qml        the big window: fullscreen, keys, the settings overlay
+Stage.qml        the big window: float/fill, keys, the settings pane
 Settings.qml     the overlay itself
 Spectrum.qml     the drawing, and nothing else
 Visualizer.js    all the logic, and the only part with tests
@@ -109,7 +109,7 @@ Visualizer.js    all the logic, and the only part with tests
 - **Windowed, the stage is the size of its own content.** A layer surface
   covering the screen swallows every click even when it is fully transparent,
   so the earlier full-screen scrim made the desktop unusable while the
-  visualiser was open. Only fullscreen anchors to all four edges.
+  visualiser was open. Only `fill` anchors to all four edges.
 
 - **A popup cannot take keyboard focus.** The stage is a `PanelWindow` with
   `WlrKeyboardFocus.Exclusive`; that is what makes `f` and `s` work at all.
