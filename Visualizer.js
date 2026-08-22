@@ -294,8 +294,12 @@ function wavePoints(frame) {
 // own, the way the WLED and camera plugins do it, and shell.json seeds the
 // defaults.
 
+// Which language the pane speaks. `auto` follows the session locale and falls
+// back to English, which is also what an untranslated key renders as.
+var LANGUAGES = ["auto", "en", "pt"]
+
 var DEFAULTS = {
-  mode: "float",
+  language: "auto",
   base: "bottom",
   cap: "flat",
   fill: "solid",
@@ -379,16 +383,6 @@ function cycle(values, current, direction) {
 // nine things to maintain and would still miss the tenth someone wants; these
 // combine, so "bars with round caps and a peak marker" and "a segmented ring"
 // are the same three settings arranged differently.
-
-// What kind of window the stage is. `float` is a layer-shell card the size of
-// its own content, hovering over everything. `tile` is a real toplevel the
-// compositor tiles like any other window — the only way to both fill the whole
-// tile and stack with the neighbours instead of covering them.
-var MODES = ["float", "tile"]
-
-function isMode(name) {
-  return MODES.indexOf(name) >= 0
-}
 
 var BASES = ["bottom", "top", "mirror", "radial"]   // where a bar grows from
 var CAPS = ["flat", "round", "segments"]            // what its end looks like

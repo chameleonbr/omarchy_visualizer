@@ -582,26 +582,87 @@ check("nothing in the audio path needs root", () => {
   }
 })
 
-// ---------------------------------------------------------------- stage mode
+// -------------------------------------------------------------------- i18n
 
-check("two ways for the stage to sit on screen", () => {
-  assert.deepStrictEqual(MODES, ["float", "tile"])
-  assert.ok(isMode("tile"))
-  assert.ok(!isMode("fullscreen"), "the old name is gone, not silently accepted")
+eval(fs.readFileSync(__dirname + "/I18n.js", "utf8").replace(/^\.pragma .*$/gm, ""))
+
+check("English is the default and every table is complete against it", () => {
+  assert.strictEqual(language(), "en")
+  const english = Object.keys(STRINGS.en)
+  for (const name of Object.keys(STRINGS)) {
+    const missing = english.filter((key) => STRINGS[name][key] === undefined)
+    assert.deepStrictEqual(missing, [], name + " is missing: " + missing.join(", "))
+    const extra = Object.keys(STRINGS[name]).filter((key) => STRINGS.en[key] === undefined)
+    assert.deepStrictEqual(extra, [], name + " has keys English does not: " + extra.join(", "))
+  }
 })
 
-check("a plugin does not take the screen uninvited", () => {
-  assert.strictEqual(DEFAULTS.mode, "float")
-  assert.strictEqual(mergeSettings({}, { mode: "tile" }).mode, "tile",
-    "the mode is a setting, so it survives closing the window")
+check("every setting the pane shows has a label and a word per value", () => {
+  const axes = {
+    base: BASES, cap: CAPS, fill: FILLS, palette: PALETTES,
+    input: INPUTS, language: LANGUAGES
+  }
+  for (const name of Object.keys(STRINGS)) {
+    setLanguage(name)
+    for (const key of Object.keys(axes)) {
+      assert.notStrictEqual(t("row." + key), "row." + key, name + " has no label for " + key)
+      for (const option of axes[key]) {
+        const full = key + "." + option
+        assert.notStrictEqual(t(full), full, name + " has no word for " + full)
+      }
+    }
+  }
+  setLanguage("en")
 })
 
-check("the mode cycles both ways", () => {
-  assert.strictEqual(cycle(MODES, "float", 1), "tile")
-  assert.strictEqual(cycle(MODES, "tile", 1), "float")
-  assert.strictEqual(cycle(MODES, "tile", -1), "float")
-  assert.strictEqual(cycle(MODES, "nonsense", 1), "float",
-    "an unreadable mode lands on the one that leaves the desktop alone")
+check("a value is a word, a number is itself", () => {
+  assert.strictEqual(value("base", "mirror"), "mirror")
+  assert.strictEqual(value("barCount", 24), "24")
+  assert.strictEqual(value("showWave", true), "on")
+  assert.strictEqual(value("showWave", false), "off")
+  setLanguage("pt")
+  assert.strictEqual(value("base", "mirror"), "espelho")
+  assert.strictEqual(value("barCount", 24), "24", "numbers are not translated")
+  setLanguage("en")
+})
+
+check("an untranslated key falls back to English, never to the key", () => {
+  setLanguage("pt")
+  STRINGS.pt["row.base"] = undefined
+  delete STRINGS.pt["row.base"]
+  assert.strictEqual(t("row.base"), "base", "English, not the key")
+  STRINGS.pt["row.base"] = "base"
+  setLanguage("en")
+})
+
+check("an unknown language is English rather than an empty pane", () => {
+  assert.strictEqual(setLanguage("klingon"), "en")
+  assert.strictEqual(detectLanguage("pt_BR.UTF-8"), "pt")
+  assert.strictEqual(detectLanguage("de_DE.UTF-8"), "en")
+  assert.strictEqual(detectLanguage(""), "en")
+})
+
+check("the idle message keeps its fix line attached to its reason", () => {
+  assert.ok(idleText("missing").indexOf("omarchy pkg add cava") > 0)
+  assert.strictEqual(idleText("nonsense"), "", "an unknown reason says nothing")
+})
+
+check("the hint says what f will do, not what it just did", () => {
+  assert.ok(hintText(false).indexOf("fullscreen") >= 0)
+  assert.ok(hintText(true).indexOf("windowed") >= 0)
+})
+
+check("the tooltip is a template, not translated fragments glued together", () => {
+  assert.ok(STRINGS.en["widget.tooltip"].indexOf("{base}") >= 0)
+  assert.strictEqual(
+    t("widget.tooltip", { base: "mirror", palette: "rainbow" }),
+    "mirror · rainbow · click to open")
+})
+
+check("the window mode is gone: the compositor owns that", () => {
+  assert.strictEqual(typeof MODES, "undefined")
+  assert.strictEqual(DEFAULTS.mode, undefined)
+  assert.strictEqual(DEFAULTS.language, "auto")
 })
 
 console.log(passed + " checks passed")

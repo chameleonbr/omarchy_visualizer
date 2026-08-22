@@ -12,6 +12,7 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "Visualizer.js" as Vis
+import "I18n.js" as I18n
 
 Item {
   id: root
@@ -22,6 +23,21 @@ Item {
   readonly property var colorKeys: Vis.colorKeysFor(palette)
 
   property string editing: ""
+
+  // `I18n.t()` is a function call, so nothing about it tells QML to
+  // re-evaluate when the language changes. Reading the epoch first is what
+  // makes these bindings depend on it.
+  readonly property int languageEpoch: service ? service.languageEpoch : 0
+  function tr(key) {
+    var epoch = root.languageEpoch
+    return I18n.t(key)
+  }
+  // A setting's value said in words: `mirror` reads as "espelho", `24` reads
+  // as itself.
+  function trValue(key, raw) {
+    var epoch = root.languageEpoch
+    return I18n.value(key, raw)
+  }
 
   signal closeRequested()
 
@@ -53,7 +69,7 @@ Item {
       spacing: Style.space(2)
 
       Text {
-        text: "Ajustes"
+        text: root.tr("settings.title")
         color: Color.foreground
         font.family: Style.font.family
         font.pixelSize: Style.font.body
@@ -63,17 +79,20 @@ Item {
 
       Repeater {
         model: [
-          { key: "mode", label: "janela", values: Vis.MODES },
-          { key: "base", label: "base", values: Vis.BASES },
-          { key: "cap", label: "ponta", values: Vis.CAPS },
-          { key: "fill", label: "preenchimento", values: Vis.FILLS },
-          { key: "palette", label: "paleta", values: Vis.PALETTES },
-          { key: "input", label: "entrada", values: Vis.INPUTS },
-          { key: "showPeaks", label: "pico", values: [false, true] },
-          { key: "showWave", label: "onda", values: [false, true] },
-          { key: "barCount", label: "barras", values: [8, 12, 14, 16, 20, 24] },
-          { key: "smoothing", label: "queda", values: [0, 30, 60, 80, 95] },
-          { key: "framerate", label: "fps", values: [15, 30, 45, 60] }
+          // `key` is both the setting and the translation namespace: the row
+          // label is `row.<key>` and each value is `<key>.<value>`. One name
+          // rather than three keeps a new axis from arriving half-translated.
+          { key: "base", values: Vis.BASES },
+          { key: "cap", values: Vis.CAPS },
+          { key: "fill", values: Vis.FILLS },
+          { key: "palette", values: Vis.PALETTES },
+          { key: "input", values: Vis.INPUTS },
+          { key: "showPeaks", values: [false, true] },
+          { key: "showWave", values: [false, true] },
+          { key: "barCount", values: [8, 12, 14, 16, 20, 24] },
+          { key: "smoothing", values: [0, 30, 60, 80, 95] },
+          { key: "framerate", values: [15, 30, 45, 60] },
+          { key: "language", values: Vis.LANGUAGES }
         ]
 
         Rectangle {
@@ -108,7 +127,7 @@ Item {
             anchors.rightMargin: Style.space(6)
 
             Text {
-              text: modelData.label
+              text: root.tr("row." + modelData.key)
               color: Qt.darker(Color.foreground, 1.4)
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -117,7 +136,7 @@ Item {
             }
 
             Text {
-              text: String(parent.parent.current)
+              text: root.trValue(modelData.key, parent.parent.current)
               color: Color.accent
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -139,9 +158,7 @@ Item {
         Column {
           required property string modelData
 
-          readonly property string label:
-            modelData === "solidColor" ? "cor"
-            : (modelData === "gradientFrom" ? "gradiente de" : "gradiente até")
+          readonly property string label: root.tr("row." + modelData)
           readonly property string value:
             root.service ? String(root.service.value(modelData) || "") : ""
           readonly property bool open: root.editing === modelData
@@ -186,7 +203,7 @@ Item {
                 // An empty setting says so rather than showing a swatch of the
                 // colour it would fall back to, which would read as a choice
                 // someone made.
-                text: parent.parent.parent.value || "tema"
+                text: parent.parent.parent.value || root.tr("settings.themed")
                 color: Qt.darker(Color.foreground, 1.6)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
@@ -221,7 +238,7 @@ Item {
         topPadding: Style.space(8)
         width: column.width
         wrapMode: Text.WordWrap
-        text: "clique num valor para trocar · botão direito volta"
+        text: root.tr("settings.help")
         color: Qt.darker(Color.foreground, 1.9)
         font.family: Style.font.family
         font.pixelSize: Style.font.caption

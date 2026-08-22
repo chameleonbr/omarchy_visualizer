@@ -7,6 +7,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "I18n.js" as I18n
 
 Item {
   id: body
@@ -14,14 +15,23 @@ Item {
   property var widget: null
   readonly property var service: widget ? widget.service : null
 
-  property bool tiled: false
+  property bool fullscreen: false
   // Read-only here. The stage owns it, because it has to survive this body
-  // being destroyed and rebuilt as the other kind of window.
+  // being destroyed with its window.
   property bool settingsOpen: false
 
   signal closeRequested()
-  signal modeToggleRequested()
+  signal fullscreenToggleRequested()
   signal settingsToggleRequested()
+
+  // `I18n.t()` is a function call, so nothing about it tells QML to
+  // re-evaluate when the language changes. Reading the epoch first is what
+  // makes these bindings depend on it.
+  readonly property int languageEpoch: service ? service.languageEpoch : 0
+  function tr(key) {
+    var epoch = body.languageEpoch
+    return I18n.t(key)
+  }
 
   // Settings sit beside the spectrum when there is room and underneath it when
   // there is not — over the top of it is the one place they must not be, since
@@ -48,7 +58,7 @@ Item {
     }
 
     if (event.key === Qt.Key_F) {
-      body.modeToggleRequested()
+      body.fullscreenToggleRequested()
       event.accepted = true
       return
     }
@@ -63,10 +73,9 @@ Item {
     anchors.fill: parent
     // Tiled, the window *is* the surface: no inset border, no rounded corner
     // faking a card, nothing between the spectrum and the edge it was given.
+    // The window *is* the surface: no inset border, no rounded corner faking a
+    // card, nothing between the spectrum and the edge the compositor gave it.
     color: Color.background
-    radius: body.tiled ? 0 : Style.cornerRadius
-    border.width: body.tiled ? 0 : 1
-    border.color: Color.popups.border
 
     // Clicking the card focuses it without closing it.
     MouseArea {
@@ -114,12 +123,8 @@ Item {
         anchors.centerIn: parent
         visible: !body.service || !body.service.running
         text: {
-          if (!body.service) return ""
-          if (body.service.idleReason === "missing")
-            return "cava não está instalado\nomarchy pkg add cava"
-          if (body.service.idleReason === "battery") return "pausado na bateria"
-          if (body.service.idleReason === "silent") return "nada tocando"
-          return ""
+          var epoch = body.languageEpoch
+          return body.service ? I18n.idleText(body.service.idleReason) : ""
         }
         horizontalAlignment: Text.AlignHCenter
         color: Qt.darker(Color.foreground, 1.5)
@@ -131,8 +136,10 @@ Item {
         id: hint
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
-        text: (body.tiled ? "f  flutuante" : "f  janela")
-          + "     s  ajustes     esc  fechar"
+        text: {
+          var epoch = body.languageEpoch
+          return I18n.hintText(body.fullscreen)
+        }
         color: Qt.darker(Color.foreground, 1.8)
         font.family: Style.font.family
         font.pixelSize: Style.font.caption

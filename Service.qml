@@ -10,6 +10,7 @@ import Quickshell.Io
 import Quickshell.Services.Pipewire
 import Quickshell.Services.UPower
 import "Visualizer.js" as Vis
+import "I18n.js" as I18n
 
 Item {
   id: root
@@ -31,6 +32,24 @@ Item {
   property int wledRateHz: 10
   property string wledDevices: ""
   property bool wledRestore: true
+
+  // ------------------------------------------------------------ language
+  //
+  // Bumped whenever the language changes, so every binding that renders a
+  // translated string has something to depend on. `I18n.t()` is a function
+  // call: nothing about it tells QML to re-evaluate when the table underneath
+  // it is swapped.
+  property int languageEpoch: 0
+
+  readonly property string locale: Quickshell.env("LC_ALL")
+    || Quickshell.env("LC_MESSAGES") || Quickshell.env("LANG") || ""
+
+  function applyLanguage(name) {
+    var wanted = name === "auto" ? I18n.detectLanguage(locale) : name
+    if (I18n.language() === wanted) return
+    I18n.setLanguage(wanted)
+    languageEpoch++
+  }
 
   // ------------------------------------------------------------ settings
   //
@@ -74,6 +93,8 @@ Item {
   }
 
   function configure(settings) {
+    applyLanguage(String(settings.language || "auto"))
+
     var nextBars = Math.max(6, Math.min(24, Number(settings.barCount) || 14))
     var nextRate = Math.max(10, Math.min(60, Number(settings.framerate) || 30))
     // cava is told these at startup, so changing them means restarting it.

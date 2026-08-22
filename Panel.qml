@@ -11,6 +11,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Visualizer.js" as Vis
+import "I18n.js" as I18n
 
 BarWidget {
   id: root
@@ -68,6 +69,7 @@ BarWidget {
   readonly property var peaks: service ? service.peaks : []
   readonly property bool running: service ? service.running : false
   readonly property string idleReason: service ? service.idleReason : ""
+  readonly property int languageEpoch: service ? service.languageEpoch : 0
 
   // shell.json seeds; the panel's own file wins. Reading through the service
   // means one merge, not one per file that happens to have an opinion.
@@ -122,9 +124,9 @@ BarWidget {
     function open(): void { stage.open() }
     function close(): void { stage.close() }
     function toggle(): void { stage.shown ? stage.close() : stage.open() }
-    function tile(): void {
+    function fullscreen(): void {
       stage.open()
-      if (!stage.tiled) stage.toggleMode()
+      stage.toggleFullscreen()
     }
     function settings(): void {
       stage.open()
@@ -144,10 +146,10 @@ BarWidget {
     fixedWidth: root.implicitWidth
     fixedHeight: root.barSize
     tooltipText: {
-      if (root.idleReason === "missing") return "cava não está instalado — omarchy pkg add cava"
-      if (root.idleReason === "silent") return "nada tocando"
-      if (root.idleReason === "battery") return "pausado na bateria"
-      return root.base + " · " + root.palette + " · clique para abrir"
+      var epoch = root.languageEpoch
+      if (root.idleReason) return I18n.idleText(root.idleReason).replace("\n", " — ")
+      return I18n.t("widget.tooltip", { base: I18n.t("base." + root.base),
+        palette: I18n.t("palette." + root.palette) })
     }
     // Middle click swaps the shape without opening anything, which is the one
     // setting anyone fiddles with.

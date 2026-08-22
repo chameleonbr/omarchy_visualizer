@@ -40,8 +40,9 @@ network. `.pragma library` is stripped before `eval`; it has to stay in the file
 manifest.json    kinds: service + bar-widget
 Service.qml      one per session: cava, the guards, the WLED bridge, settings
 Panel.qml        one per monitor: the bar widget, and it owns the Stage
-Stage.qml        picks the window: a layer-shell card or a real toplevel
-StageBody.qml    what either one draws: spectrum, keys, the settings pane
+Stage.qml        the toplevel window and its lifetime
+StageBody.qml    what it draws: spectrum, keys, the settings pane
+I18n.js          every string the plugin says, en + pt
 Settings.qml     the overlay itself
 Spectrum.qml     the drawing, and nothing else
 Visualizer.js    all the logic, and the only part with tests
@@ -149,7 +150,15 @@ ends up anchored to both edges at once and silently spans the window. It is a
 layout bug, not an error: nothing is logged. `StageBody.qml` sets `x`, `y`,
 `width` and `height` directly for exactly this reason.
 
-**A `FloatingWindow` and a `PanelWindow` are not two configurations of one
-window.** Switching between the stage's two modes destroys one and builds the
-other, which is why the open state and the settings state live on `Stage.qml`
-rather than inside the body: the body does not survive the switch.
+**The stage is a `FloatingWindow`, not a layer surface.** It was a
+`PanelWindow` once; that is why it used to hover over every other window and
+could never be anything but a card in the middle of an output. Placement,
+tiling and floating belong to the compositor and the user's window rules — the
+plugin only sets a title and an implicit size. The open and settings state
+live on `Stage.qml` rather than inside `StageBody.qml`, because the body dies
+with its window.
+
+**`I18n.t()` is a function call, so a binding that calls it has no dependency
+on the language.** Every file that renders a string reads `service.languageEpoch`
+first, inside a `tr()` helper. Without that read the language setting appears
+to do nothing while every piece works when tested alone.

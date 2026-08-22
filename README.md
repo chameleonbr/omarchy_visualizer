@@ -76,21 +76,22 @@ Click the widget and the spectrum gets a window of its own.
 
 | Key | What it does |
 |---|---|
-| `f` | switches the window between `float` and `tile` |
+| `f` | fullscreen, and back |
 | `s` | settings, beside the spectrum |
 | `esc` | steps back one layer — out of the settings, then closed |
 
-`float` is a layer-shell card the size of its own content: it hovers over
-everything and the desktop underneath stays clickable. Good for a glance.
+The stage is an ordinary window titled `Visualizer`. Whether it tiles, floats,
+where it opens and how big — that is your compositor's job, and you already
+have rules and keybinds for it. Under Hyprland:
 
-`tile` is a real window. The compositor tiles it like any other, which is the
-only way to get the two things a layer surface cannot give — it fills the whole
-tile it was handed, and it stacks with its neighbours instead of sitting
-permanently in front of them. Every window keybind you already have works on
-it.
+```
+windowrule = float, title:^(Visualizer)$
+windowrule = size 900 400, title:^(Visualizer)$
+windowrule = center, title:^(Visualizer)$
+```
 
-The mode is a setting rather than a passing state, so it survives closing the
-window.
+`f` does the one thing a window rule cannot decide for you: fullscreen, and
+back.
 
 The settings open **beside** the spectrum, not over it — every control in them
 is previewed by the visualiser next to it, so covering it would defeat the
@@ -113,7 +114,7 @@ It can be bound too:
 
 ```bash
 omarchy-shell avila.visualizer toggle
-omarchy-shell avila.visualizer tile
+omarchy-shell avila.visualizer fullscreen
 omarchy-shell avila.visualizer settings
 ```
 
@@ -204,3 +205,14 @@ the pieces fit and `SPEC.md` for why they are shaped this way.
 ## License
 
 MIT
+
+## Language
+
+Everything the plugin says is translated, and English is the default. `auto`
+follows `LANG` and falls back to English for anything not translated rather
+than guessing at a near neighbour; `en` and `pt` force one. The setting is in
+the pane, so switching it is one click and takes effect immediately.
+
+Adding a language is one entry in `I18n.js`. The checks fail if it is missing
+a key English has, or has one English does not, or leaves any setting value
+without a word.

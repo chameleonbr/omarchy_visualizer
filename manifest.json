@@ -39,19 +39,20 @@
       "wledRateHz": 10,
       "wledDevices": "",
       "wledRestore": true,
-      "mode": "float"
+      "language": "auto"
     },
     "schema": [
       {
-        "key": "mode",
+        "key": "language",
         "type": "string",
-        "label": "Stage window",
-        "description": "float is a layer-shell card over everything; tile is a real window the compositor tiles.",
+        "label": "Language",
+        "description": "auto follows the session locale; en and pt force one.",
         "options": [
-          "float",
-          "tile"
+          "auto",
+          "en",
+          "pt"
         ],
-        "defaultValue": "float"
+        "defaultValue": "auto"
       },
       {
         "key": "shape",
