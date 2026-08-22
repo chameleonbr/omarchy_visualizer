@@ -78,15 +78,24 @@ var MAX_CONFIG_BYTES = 65536
 // the point of a ceiling.
 var MAX_WLED_DEVICES = 32
 
-// Exits 0 only for a regular file, of a size we are willing to hold. `-f`
-// and `stat -L` both follow the link, so a symlink to something enormous is
-// measured by what it points at rather than by the link.
-function sizeProbeCommand(path, maxBytes) {
+// Read and ceiling in one act, because they cannot be two.
+//
+// Stat-then-open is a race: the file that was measured and the file that is
+// opened need not be the same one, and a same-user writer only has to grow it
+// in between. `head -c` asks for at most `maxBytes + 1` bytes, so whatever
+// arrives is bounded by construction — the bytes that arrive ARE the bytes
+// that were counted. The extra byte is what distinguishes a file that fitted
+// from one that did not; a file that did not is refused rather than
+// truncated, because a truncated JSON file is a corrupt one.
+//
+// `timeout` because `-f` is checked in the same breath but not in the same
+// instant: a path that has become a fifo would otherwise hold the read open
+// for as long as the shell lives.
+function readCappedCommand(path, maxBytes) {
   return ["sh", "-c",
     'f="$1"; c="$2"; ' +
     '[ -f "$f" ] || exit 1; ' +
-    's=$(stat -Lc %s -- "$f") || exit 1; ' +
-    '[ "$s" -le "$c" ] || exit 1',
+    'exec timeout 5 head -c "$((c + 1))" -- "$f"',
     "omarchy-visualizer", path, String(maxBytes)]
 }
 

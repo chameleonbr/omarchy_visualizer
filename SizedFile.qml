@@ -1,10 +1,16 @@
-// A FileView that stats before it reads.
+// A file the long-lived shell reads, through a ceiling it cannot be argued
+// out of.
 //
-// `preload: false` is what makes the gate real: FileView only reads when it
-// is asked to, so not calling reload() is not reading. Every load — the
-// first one and every one a watched change asks for — goes through a probe
-// that refuses anything that is not a regular file of at most `maxBytes`.
-// Over the ceiling the last good text stands and nothing is allocated.
+// The obvious shape — stat in one process, open in another — is a race: the
+// file that was measured and the file that gets opened need not be the same
+// one, and a same-user writer only has to grow it in between. So the read is
+// the ceiling. `Vis.readCappedCommand` asks for at most `maxBytes + 1` bytes
+// and hands them back on stdout, which means the bytes that arrive are the
+// bytes that were counted, whatever happened to the file in the meantime.
+//
+// FileView stays for the two things it is still good at — watching the path,
+// and writing to it. Nothing here ever reads through it, which is why
+// `preload` is off and `reload()` is never called.
 
 import QtQuick
 import Quickshell.Io
@@ -16,47 +22,40 @@ Item {
   property alias path: file.path
   property int maxBytes: Vis.MAX_CONFIG_BYTES
 
-  // False until a probe has passed. FileView reads on demand, so leaving
-  // preload off is what keeps the file unread — the flag is the gate, not a
-  // note about one.
-  property bool allowed: false
-
   signal fileLoaded(string text)
 
-  function text() { return file.text() }
   function setText(value) { file.setText(value) }
 
   // Changes arrive in bursts — an editor writing, then truncating, then
-  // writing again — so a probe already in flight queues one rerun rather
-  // than spawning one process per notification.
-  function probe() {
+  // writing again — so a read already in flight queues one rerun rather than
+  // spawning one process per notification.
+  function load() {
     if (!file.path) return
-    if (probeProcess.running) { probeProcess.queued = true; return }
-    probeProcess.running = true
+    if (reader.running) { reader.queued = true; return }
+    reader.running = true
   }
 
-  onPathChanged: probe()
+  onPathChanged: load()
 
   FileView {
     id: file
-    preload: root.allowed
+    preload: false
     watchChanges: true
     printErrors: false
-    onFileChanged: root.probe()
-    onLoaded: root.fileLoaded(file.text())
+    onFileChanged: root.load()
   }
 
   Process {
-    id: probeProcess
+    id: reader
     property bool queued: false
-    command: Vis.sizeProbeCommand(file.path, root.maxBytes)
+    command: Vis.readCappedCommand(file.path, root.maxBytes)
+    stdout: StdioCollector { id: sink }
     onExited: function(code) {
-      // The first pass opens the gate, which is itself the read. After that
-      // the gate is already open and a re-read has to be asked for.
-      if (code === 0) {
-        if (root.allowed) file.reload()
-        else root.allowed = true
-      }
+      // One byte over is exactly what `head` was asked for, and it is the
+      // proof the file did not fit. Refused rather than truncated: half a
+      // JSON file is a corrupt one, and pretending otherwise would silently
+      // reset every setting past the cut.
+      if (code === 0 && sink.text.length <= root.maxBytes) root.fileLoaded(sink.text)
       if (queued) { queued = false; running = true }
     }
   }

@@ -57,6 +57,24 @@ Visualizer.js    all the logic, and the only part with tests
   would flip a setting nobody can see. Any new accelerator has to be unique
   across both lists; the check covers the concatenation.
 
+- **A ceiling you check separately is not a ceiling.** Stat-then-open is a
+  race: the file that was measured and the file that gets opened need not be
+  the same one, and a same-user writer only has to grow it in between. The read
+  itself has to be the limit — `head -c maxBytes + 1` through a `Process`, with
+  the extra byte as the proof it did not fit. `FileView` has no size ceiling of
+  its own and is kept only for `watchChanges` and `setText`; nothing reads
+  through it, which is why `preload` stays off and `reload()` is never called.
+  Clearing the `path` for a refused file would be worse than useless: the
+  watcher needs it, and without it a file that grew could never be seen to
+  shrink.
+
+- **`SETTING_ROWS` is not the whole list any more.** The WLED rows live in
+  `WLED_ROWS` and only join the pane when `wled.json` names a light, so a
+  letter has to be resolved against the rows *on screen* — `Settings.cycleAccel`
+  — rather than against every row that exists. Resolving against the full list
+  would flip a setting nobody can see. Any new accelerator has to be unique
+  across both lists; the check covers the concatenation.
+
 - **`FileView` reads on demand, and that is the only gate there is.** There is
   no size ceiling on the type, so `SizedFile` keeps `preload` off until a
   `stat` probe has passed and only then opens it — the flag *is* the gate. Two

@@ -903,20 +903,25 @@ check("a file past the ceiling is refused rather than held", () => {
     "an ordinary file still loads")
 })
 
-check("the probe refuses everything that is not a small regular file", () => {
-  const command = sizeProbeCommand("/home/someone/.config/omarchy/visualizer.json",
+check("the read is the ceiling, not a measurement taken before it", () => {
+  // The bug this replaced: stat in one process, open in another. A same-user
+  // writer only had to grow the file in between for the shell to read bytes
+  // nobody had counted.
+  const command = readCappedCommand("/home/someone/.config/omarchy/visualizer.json",
     MAX_CONFIG_BYTES)
   const script = command[2]
   assert.strictEqual(command[0], "sh")
+  assert.ok(script.indexOf("stat") < 0, "nothing is measured separately any more")
+  assert.ok(script.indexOf('head -c "$((c + 1))"') >= 0,
+    "one byte past the ceiling, so a file that did not fit says so")
   assert.ok(script.indexOf('[ -f "$f" ] || exit 1') >= 0, "regular files only")
-  assert.ok(script.indexOf("stat -Lc %s") >= 0, "a symlink is measured by its target")
-  assert.ok(script.indexOf('[ "$s" -le "$c" ] || exit 1') >= 0, "and by the ceiling")
+  assert.ok(script.indexOf("timeout") >= 0, "a fifo must not hold the read open")
   assert.strictEqual(command[command.length - 1], String(MAX_CONFIG_BYTES))
 })
 
-check("the path the probe reads is data, never script", () => {
+check("the path the read runs on is data, never script", () => {
   const nasty = "/home/someone/$(touch /tmp/pwned)/`id`.json"
-  const command = sizeProbeCommand(nasty, MAX_CONFIG_BYTES)
+  const command = readCappedCommand(nasty, MAX_CONFIG_BYTES)
   assert.strictEqual(command.indexOf(nasty), command.length - 2,
     "passed as an argument")
   assert.strictEqual(command[2].indexOf(nasty), -1, "and never spliced in")

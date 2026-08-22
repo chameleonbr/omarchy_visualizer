@@ -280,9 +280,10 @@ terminal, and a bar widget has no business rewriting it.
 
 It reads one more, `~/.config/omarchy/wled.json`, which the WLED plugin owns.
 
-Both of the files it reads go through `SizedFile`, which stats before it
-reads: a file that is not a regular file, or is larger than 64 KiB, is never
-opened and the last good settings stand. The shell outlives every window in
-it, so anything it reads it keeps — and the device list in `wled.json` is
-scanned to a fixed depth for the same reason. Trim the file and it loads
-again on the spot; no restart.
+Both of the files it reads go through `SizedFile`, which reads through a
+ceiling rather than measuring against one: at most 64 KiB plus the byte that
+proves the file was bigger, so what arrives is bounded whatever the file does
+while it is being read. Over that, the last good settings stand. The shell
+outlives every window in it, so anything it reads it keeps — and the device
+list in `wled.json` is scanned to a fixed depth for the same reason. Trim the
+file and it loads again on the spot; no restart.
