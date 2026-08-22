@@ -3,7 +3,9 @@
 The sound, in the Omarchy bar. Five shapes, six palettes, and the same colours
 mirrored onto your WLED lights.
 
-![the spectrum in the bar](preview.png)
+![four of the styles: pills with peak markers, a mirrored gradient with a wave under it, a segmented meter, and a ring](preview.png)
+
+Four combinations of the same four axes.
 
 It does not resolve a problem. It is an ornament, and the design assumes that:
 every decision below chooses between *prettier* and *does not burn the
@@ -28,41 +30,88 @@ Without it the widget shows a crossed box and says so on hover, rather than
 disappearing — a widget that shows nothing is indistinguishable from one that
 failed to load.
 
-## Shapes
+## Styles
 
-| Shape | What it draws |
+Four axes rather than a list of finished styles. They combine, so the shapes
+people recognise from a reference sheet are arrangements of these rather than
+fifteen separate things to maintain.
+
+| Axis | Values |
 |---|---|
-| `bars` | bars growing from the floor — the most legible on a thin bar |
-| `mirror` | bars growing from the centre, up and down |
-| `blocks` | each bar cut into lit and unlit segments, like a stereo meter |
-| `dots` | one dot per band, riding the value — the quiet option |
-| `wave` | a line joining the peaks; less ink, for a minimal theme |
+| **base** | `bottom` · `top` · `mirror` · `radial` |
+| **cap** | `flat` · `round` · `segments` |
+| **fill** | `solid` · `barGradient` · `screenGradient` |
+| **extras** | peak markers · a wave underneath |
 
-Middle click cycles them without opening anything.
+`radial` is a base like any other, so a full ring and an open fan are the same
+geometry with a different `spread`.
 
-Four of them are rectangles, which for this many bands costs far less than a
-canvas. `wave` is the only one that needs a canvas, and that is why it is not
-the default.
+The peak marker rises instantly and sinks slowly: the bars say what is happening
+now, the markers say what just happened, and that is what makes a meter readable
+at a glance.
 
 ## Palettes
 
 | Palette | What it does |
 |---|---|
-| `accent` | the theme's accent, solid |
-| `foreground` | the theme's foreground, solid — the soberest |
+| `accent` · `foreground` | the theme's colours, solid |
 | `intensity` | foreground → accent as a band gets louder |
-| `spectrum` | hue swept low to high across the bands |
-| `gradient` | between two hex colours you pick |
-| `urgent` | accent, turning urgent above the peak threshold |
+| `spectrum` | hue swept across the bands, **saturation from the theme** |
+| `rainbow` | the same sweep at full saturation, ignoring the theme |
+| `heat` | cold at rest, hot at the peaks |
+| `gradient` | between two colours you pick |
+| `solid` | one colour you pick |
+| `urgent` | accent, turning urgent above the threshold |
 
-Two families on purpose: `intensity` and `urgent` move with the sound,
-`spectrum` and `gradient` are fixed to position. One gives colour motion and the
-other keeps the bar visually still. Which you want is taste.
+Two families on purpose: `intensity`, `heat` and `urgent` move with the sound;
+`spectrum`, `rainbow` and `gradient` are fixed to position. One gives colour
+motion, the other keeps the bar visually still.
 
-`spectrum` takes its saturation from the theme's accent, so a muted theme gets a
-muted sweep rather than a rainbow borrowed from someone else's desktop.
+`spectrum` takes its saturation from the theme, so a muted theme gets a muted
+sweep. `rainbow` is the loud version, and having both is the point.
 
-## What it costs you
+## The stage
+
+Click the widget and the spectrum gets a window of its own.
+
+| Key | What it does |
+|---|---|
+| `f` | fullscreen |
+| `s` | settings, over the top |
+| `esc` | steps back one layer — out of the settings, then out of fullscreen, then closed |
+
+Every settings row cycles on click, left forward and right back. There is no
+apply button: the visualiser behind the panel is the preview.
+
+It can be bound too:
+
+```bash
+omarchy-shell avila.visualizer toggle
+omarchy-shell avila.visualizer fullscreen
+omarchy-shell avila.visualizer settings
+```
+
+## Where it listens
+
+| `input` | What it hears |
+|---|---|
+| `system` | what the machine is playing |
+| `mic` | the microphone |
+| `both` | the two summed together |
+
+`both` is not a cava setting: cava reads one device, and a device that hears
+both does not exist. The plugin builds one — a null sink fed by two loopbacks —
+while the setting is on, and removes it when you change it or the shell exits. A
+stray sink left in someone's audio graph outlives the widget.
+
+## Settings live in their own file
+
+`~/.config/omarchy/visualizer.json`. The bar host has no way for a widget to
+write its own `shell.json` entry, and a plugin editing that file races the shell
+whenever the bar is dragged. The `shell.json` entry seeds the defaults; the
+file wins.
+
+## What it costs you## What it costs you
 
 This runs on a laptop, so the guards are most of the design.
 
