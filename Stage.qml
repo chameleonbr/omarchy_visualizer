@@ -203,11 +203,10 @@ PanelWindow {
         anchors.margins: Style.space(14)
 
         width: root.sideBySide ? Style.space(280) : undefined
-        // Sized to what it holds when there is room to spare, so the pane does
-        // not sit half empty next to a spectrum that could have had the space.
-        height: root.sideBySide
-          ? Math.min(parent.height - Style.space(28), implicitHeight)
-          : Style.space(280)
+        // Full height beside the spectrum. Sizing it to its rows instead leaves
+        // a dead column under it that belongs to neither one — an empty gap in
+        // the middle of the layout reads worse than a sidebar with room left.
+        height: root.sideBySide ? undefined : Style.space(280)
 
         onCloseRequested: root.settingsOpen = false
       }

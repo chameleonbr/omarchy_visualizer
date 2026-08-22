@@ -16,10 +16,6 @@ import "Visualizer.js" as Vis
 Item {
   id: root
 
-  // What the pane needs, so the stage can size it to its content instead of
-  // leaving it half empty.
-  implicitHeight: column.implicitHeight + Style.space(20)
-
   property var widget: null
   readonly property var service: widget ? widget.service : null
   readonly property string palette: service ? service.value("palette") : "accent"
