@@ -192,3 +192,18 @@ gradient between a colour and itself.
 function reads.** `Spectrum.qml`'s `pair` reads `root.fill` in its own
 expression for that reason; without it, switching the fill left every bar
 painted from the pair it was built with.
+
+**The cava config must never live in a shared directory.** It fell back to
+`/tmp/omarchy-visualizer/cava.conf` when `XDG_RUNTIME_DIR` was unset — a
+predictable path in a world-writable namespace, created with a bare `mkdir -p`
+and written with a plain write. Another local user can win that race: leave a
+directory or a symlink there first and a shell that lives for the whole
+session writes the config through it into a file of their choosing.
+
+`Vis.configDir` now takes `XDG_RUNTIME_DIR` (0700, ours) or `$HOME/.cache`, and
+returns `""` when it has neither — `shouldRun` reads `configReady` and the
+plugin stays off rather than reaching for `/tmp`. `Vis.configDirCommand`
+creates the directory `mkdir -m 700` and refuses a path that is a symlink or
+that someone else owns, and removes a `cava.conf` that is a symlink or not a
+plain file of ours instead of writing through it. The directory name is passed
+as an argument, never spliced into the script.

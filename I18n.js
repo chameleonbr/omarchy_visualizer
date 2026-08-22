@@ -31,6 +31,8 @@ var STRINGS = {
     "idle.missing": "cava is not installed",
     "idle.missingFix": "omarchy pkg add cava",
     "idle.battery": "paused on battery",
+    "idle.noConfigDir": "nowhere private to write cava's config",
+    "idle.noConfigDirFix": "set XDG_RUNTIME_DIR or HOME",
     "idle.silent": "nothing playing",
 
     "hint.settings": "s  settings",
@@ -97,6 +99,8 @@ var STRINGS = {
     "idle.missing": "cava não está instalado",
     "idle.missingFix": "omarchy pkg add cava",
     "idle.battery": "pausado na bateria",
+    "idle.noConfigDir": "sem lugar privado para gravar a config do cava",
+    "idle.noConfigDirFix": "defina XDG_RUNTIME_DIR ou HOME",
     "idle.silent": "nada tocando",
 
     "hint.settings": "s  ajustes",
@@ -203,6 +207,8 @@ function value(row, raw) {
 // belongs to rather than being stitched together at the call site.
 function idleText(reason) {
   if (reason === "missing") return t("idle.missing") + "\n" + t("idle.missingFix")
+  if (reason === "noConfigDir")
+    return t("idle.noConfigDir") + "\n" + t("idle.noConfigDirFix")
   if (reason === "battery") return t("idle.battery")
   if (reason === "silent") return t("idle.silent")
   return ""

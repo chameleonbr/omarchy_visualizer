@@ -253,3 +253,15 @@ are, so `1` is always the first one on screen.
 The letters do not move when you change language. Muscle memory outlives a
 translation table, so `fps` shows `fps (r)` in English and Portuguese alike
 where the label has no `r` of its own to paint.
+
+## Where it writes
+
+Two files, both yours:
+
+- `~/.config/omarchy/visualizer.json` — your settings.
+- `$XDG_RUNTIME_DIR/omarchy-visualizer/cava.conf` — the config cava is started
+  with, in a directory created `0700`, falling back to `~/.cache` and to not
+  running at all rather than to a shared directory like `/tmp`.
+
+It never touches `~/.config/cava`. That file belongs to whoever runs cava in a
+terminal, and a bar widget has no business rewriting it.

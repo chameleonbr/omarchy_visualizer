@@ -15,13 +15,52 @@
 // Written to $XDG_RUNTIME_DIR, never to ~/.config/cava. That file belongs to
 // the user, and someone who runs cava in a terminal should not find their setup
 // rewritten by a bar widget.
-
-function configDir(runtimeDir) {
-  return (runtimeDir || "/tmp") + "/omarchy-visualizer"
+//
+// It must go somewhere only this user can write.
+//
+// It used to fall back to `/tmp/omarchy-visualizer/cava.conf` whenever
+// XDG_RUNTIME_DIR was unset, with no mode on the directory and no check that
+// the path was what it claimed to be. `/tmp` is a shared namespace: another
+// local user can create that directory first, or leave a symlink where the
+// config goes, and a shell that lives for the whole session then writes
+// through it into a file of their choosing. `mkdir -p` does not object to a
+// directory it did not create, and a plain write follows a symlink.
+//
+// XDG_RUNTIME_DIR is /run/user/<uid>: 0700 and owned by us. The fallback is
+// now ~/.cache, which is likewise not shared. With neither available the
+// plugin does not run — it is an ornament, and failing closed costs nothing
+// that is worth a foothold.
+function configDir(runtimeDir, homeDir) {
+  if (runtimeDir) return runtimeDir + "/omarchy-visualizer"
+  if (homeDir) return homeDir + "/.cache/omarchy-visualizer"
+  return ""
 }
 
-function configPath(runtimeDir) {
-  return configDir(runtimeDir) + "/cava.conf"
+function configPath(runtimeDir, homeDir) {
+  var dir = configDir(runtimeDir, homeDir)
+  return dir ? dir + "/cava.conf" : ""
+}
+
+// Create the directory 0700 and refuse anything that is not ours.
+//
+// The checks are belt and braces on top of choosing a private parent: with a
+// 0700 parent nobody else can put a symlink in the way, and the tests below
+// pin that the command still looks for one. `-O` is "owned by the effective
+// user", which is what rules out a directory someone else made first.
+//
+// A config that is already there but is a symlink, or is not a plain file, or
+// belongs to someone else, is removed rather than written through.
+function configDirCommand(dir) {
+  return ["sh", "-c",
+    'd="$1"; ' +
+    'mkdir -m 700 -p -- "$d" || exit 1; ' +
+    '[ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || exit 1; ' +
+    'chmod 700 -- "$d" || exit 1; ' +
+    'f="$d/cava.conf"; ' +
+    'if [ -e "$f" ] || [ -L "$f" ]; then ' +
+    '  [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ] || rm -f -- "$f" || exit 1; ' +
+    'fi',
+    "omarchy-visualizer", dir]
 }
 
 // --------------------------------------------------------- audio input
@@ -240,6 +279,9 @@ function isWarmup(frameNumber) {
 
 function shouldRun(state) {
   if (!state.installed) return false
+  // No private directory means no config, and no config means cava would read
+  // whatever it found in the user's own ~/.config/cava instead.
+  if (state.configReady === false) return false
   if (!state.visible) return false
   if (state.pauseWhenSilent && !state.playing) return false
   if (state.pauseOnBattery && state.onBattery) return false
@@ -249,6 +291,7 @@ function shouldRun(state) {
 // Why it is not running, for the widget to say. "Nothing" is not an error.
 function idleReason(state) {
   if (!state.installed) return "missing"
+  if (state.configReady === false) return "noConfigDir"
   if (!state.visible) return "hidden"
   if (state.pauseWhenSilent && !state.playing) return "silent"
   if (state.pauseOnBattery && state.onBattery) return "battery"

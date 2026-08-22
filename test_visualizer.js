@@ -47,10 +47,53 @@ check("settings outside their range are clamped, not obeyed", () => {
 
 check("the config is written where it cannot clobber the user's", () => {
   // ~/.config/cava belongs to whoever runs cava in a terminal.
-  const path = configPath("/run/user/1000")
+  const path = configPath("/run/user/1000", "/home/someone")
   assert.ok(path.indexOf("/run/user/1000") === 0)
   assert.ok(path.indexOf(".config/cava") < 0)
-  assert.ok(configPath("").indexOf("/tmp") === 0, "a fallback, not a crash")
+})
+
+check("the config never lands in a directory other users can write", () => {
+  // The bug: `/tmp/omarchy-visualizer/cava.conf` when XDG_RUNTIME_DIR was
+  // unset. Predictable, shared, and created with `mkdir -p`, which is happy to
+  // adopt a directory — or a symlink — someone else put there first. A shell
+  // that lives for the whole session then writes through it.
+  assert.strictEqual(configPath("", "/home/someone"),
+    "/home/someone/.cache/omarchy-visualizer/cava.conf")
+  assert.strictEqual(configPath("", ""), "",
+    "with nowhere private, no path at all — never a shared one")
+
+  for (const [runtime, home] of [["/run/user/1000", "/home/a"], ["", "/home/a"], ["", ""]]) {
+    const path = configPath(runtime, home)
+    assert.ok(path.indexOf("/tmp") !== 0, "still reaching for /tmp: " + path)
+    assert.ok(path.indexOf("/var/tmp") !== 0, "still reaching for /var/tmp: " + path)
+  }
+})
+
+check("the directory is made private and checked for being ours", () => {
+  const script = configDirCommand("/run/user/1000/omarchy-visualizer").join(" ")
+  assert.ok(script.indexOf("mkdir -m 700") > 0, "created private, not fixed up after")
+  assert.ok(script.indexOf('[ ! -L "$d" ]') > 0, "a symlink in the way is refused")
+  assert.ok(script.indexOf('[ -O "$d" ]') > 0, "a directory someone else made is refused")
+  assert.ok(script.indexOf('[ ! -L "$f" ]') > 0, "the config itself is not written through a link")
+  assert.ok(script.indexOf("sudo") < 0 && script.indexOf("pkexec") < 0)
+
+  // The path is an argument, not spliced into the script: a directory name is
+  // data, and $HOME is not always a name anyone vetted.
+  const command = configDirCommand("/x/'; rm -rf ~; '")
+  assert.strictEqual(command[command.length - 1], "/x/'; rm -rf ~; '")
+  assert.strictEqual(command[2].indexOf("rm -rf ~"), -1)
+})
+
+check("no private directory means the plugin stays off", () => {
+  const state = {
+    installed: true, visible: true, playing: true,
+    onBattery: false, pauseWhenSilent: true, pauseOnBattery: true
+  }
+  assert.strictEqual(shouldRun(Object.assign({}, state, { configReady: true })), true)
+  assert.strictEqual(shouldRun(Object.assign({}, state, { configReady: false })), false)
+  assert.strictEqual(idleReason(Object.assign({}, state, { configReady: false })), "noConfigDir")
+  // Before the check has run there is nothing to report and nothing to start.
+  assert.strictEqual(idleReason(Object.assign({}, state, { configReady: null })), "")
 })
 
 check("cava is run against that config, and never installed", () => {

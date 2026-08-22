@@ -145,6 +145,7 @@ Item {
 
   readonly property var guardState: ({
     installed: installed === 1,
+    configReady: configReady,
     visible: visibleWidgets > 0,
     playing: playing,
     onBattery: UPower.onBattery,
@@ -161,8 +162,16 @@ Item {
 
   // ------------------------------------------------------------- cava
 
-  readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"
-  readonly property string configFilePath: Vis.configPath(runtimeDir)
+  // No `/tmp` fallback: see Vis.configDir. An empty path means there is
+  // nowhere private to write, and the plugin stays off.
+  readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || ""
+  readonly property string homeDir: Quickshell.env("HOME") || ""
+  readonly property string configDirPath: Vis.configDir(runtimeDir, homeDir)
+  readonly property string configFilePath: Vis.configPath(runtimeDir, homeDir)
+
+  // null until the directory has been made and checked; false if it could not
+  // be. `shouldRun` reads it, so cava never starts without its own config.
+  property var configReady: null
 
   Process {
     id: installCheck
@@ -182,16 +191,21 @@ Item {
   }
 
   // FileView cannot create the directory, and the first write happens before
-  // anything else has had a reason to make it.
+  // anything else has had a reason to make it. It is also where the directory
+  // is made 0700 and checked for being ours rather than something left in the
+  // way — see Vis.configDirCommand.
   Process {
     id: makeDir
-    command: ["mkdir", "-p", Vis.configDir(root.runtimeDir)]
-    running: true
-    onExited: root.writeConfig()
+    command: Vis.configDirCommand(root.configDirPath)
+    running: root.configDirPath !== ""
+    onExited: function(code) {
+      root.configReady = code === 0
+      if (root.configReady) root.writeConfig()
+    }
   }
 
   function writeConfig() {
-    if (makeDir.running) return
+    if (makeDir.running || configReady !== true) return
     configFile.setText(Vis.cavaConfig({
       barCount: barCount, framerate: framerate,
       input: input, micSource: micSource
