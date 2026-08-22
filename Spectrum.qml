@@ -61,74 +61,85 @@ Item {
   }
 
   // ------------------------------------------------------- linear bars
+  //
+  // Two separate repeaters rather than one with a branch inside it. The
+  // segmented cap needs the FULL height to lay its segments out, while a solid
+  // bar is only as tall as its value — reconciling those in one delegate meant
+  // reparenting children out of it, and a Repeater delegate that reparents
+  // rebinds every child on every frame. At sixteen bars of eight segments that
+  // is enough to stall the shell.
 
   Repeater {
-    model: root.radial ? [] : root.frame
+    model: !root.radial && root.cap !== "segments" ? root.frame : []
 
-    Item {
+    Rectangle {
       id: bar
       required property int index
       required property real modelData
 
-      readonly property var geometry:
-        Vis.barGeometry(root.base, modelData, root.height, root.minBar)
+      readonly property var geometry: Vis.barGeometry(
+        root.base, modelData, root.height, root.minBar, root.devicePixelRatio)
       readonly property var pair: root.gradientPair(index, modelData)
 
       x: root.barX(index)
-      y: Vis.floorToDevice(geometry.y, root.devicePixelRatio)
+      // Already on the device grid: barGeometry rounds the length once and
+      // derives the position, so rounding again here would put the base back
+      // on the loose footing this was fixing.
+      y: geometry.y
       width: root.drawWidth
-      height: Vis.floorToDevice(geometry.height, root.devicePixelRatio)
+      height: geometry.height
+      radius: root.cap === "round" ? Math.min(width, height) / 2 : 0
+      color: root.fill === "solid" ? root.colorAt(index, modelData) : "transparent"
 
-      // ---- flat and round caps
+      gradient: root.fill === "solid" ? null : barFill
 
-      Rectangle {
-        anchors.fill: parent
-        visible: root.cap !== "segments"
-        // A round cap is the same rectangle with its corners taken off, which
-        // costs nothing and is most of what makes the reference sheets look
-        // designed rather than plotted.
-        radius: root.cap === "round" ? Math.min(width, height) / 2 : 0
-        color: root.fill === "solid" ? root.colorAt(bar.index, bar.modelData) : "transparent"
-
-        // Declared once and referenced, never inlined into the binding: an
-        // object declaration is not an expression in QML, and
-        // `cond ? null : Gradient { … }` is a syntax error rather than a
-        // conditional gradient.
-        gradient: root.fill === "solid" ? null : barFill
-
-        Gradient {
-          id: barFill
-          // Top to bottom, so the tip carries the current reading and the base
-          // carries the resting colour: the bar says the same thing twice.
-          GradientStop { position: 0; color: bar.pair.tip }
-          GradientStop { position: 1; color: bar.pair.base }
-        }
+      Gradient {
+        id: barFill
+        GradientStop { position: 0; color: bar.pair.tip }
+        GradientStop { position: 1; color: bar.pair.base }
       }
+    }
+  }
 
-      // ---- segmented cap
+  // ---------------------------------------------------- segmented bars
+
+  Repeater {
+    model: !root.radial && root.cap === "segments" ? root.frame : []
+
+    Item {
+      id: column
+      required property int index
+      required property real modelData
+
+      readonly property int lit: Vis.litSegments(modelData, root.segments)
+      readonly property real unit: Vis.floorToDevice(
+        Math.max(1, (root.height - root.gap * (root.segments - 1)) / root.segments),
+        root.devicePixelRatio)
+      readonly property color tint: root.colorAt(index, modelData)
+
+      x: root.barX(index)
+      y: 0
+      width: root.drawWidth
+      height: root.height
 
       Repeater {
-        model: root.cap === "segments" ? root.segments : 0
+        model: root.segments
 
         Rectangle {
           required property int index
 
-          readonly property real unit:
-            Math.max(1, (root.height - root.gap * (root.segments - 1)) / root.segments)
-          readonly property int lit: Vis.litSegments(bar.modelData, root.segments)
-
-          // Positioned from the bottom, because segments count up from the
-          // floor and a Column lays out from the top.
-          parent: bar.parent
-          x: bar.x
-          y: root.height - (index + 1) * unit - index * root.gap
-          width: bar.width
-          height: unit
-          radius: root.cap === "round" ? width / 2 : 0
-          color: root.colorAt(bar.index, bar.modelData)
+          // Counted up from the floor, and positioned rather than stacked: a
+          // Column lays out from the top and the reconciliation is where this
+          // went wrong the first time.
+          x: 0
+          y: column.height - (index + 1) * column.unit - index * root.gap
+          width: column.width
+          height: column.unit
+          radius: 0
+          color: column.tint
           // Unlit segments stay faintly drawn so the column keeps its shape and
-          // the whole thing reads as a meter rather than as loose blocks.
-          opacity: index < lit ? 1 : 0.12
+          // reads as a meter rather than as loose blocks.
+          opacity: index < column.lit ? 1 : 0.1
         }
       }
     }
@@ -143,15 +154,13 @@ Item {
       required property int index
       required property real modelData
 
-      readonly property var geometry:
-        Vis.barGeometry(root.base, modelData, root.height, root.minBar)
+      readonly property var geometry: Vis.barGeometry(
+        root.base, modelData, root.height, root.minBar, root.devicePixelRatio)
 
       x: root.barX(index)
       // Sits at the far end of where the bar would reach, which is what makes
       // it read as a high-water mark rather than as another bar.
-      y: root.base === "top"
-        ? Vis.floorToDevice(geometry.height, root.devicePixelRatio)
-        : Vis.floorToDevice(geometry.y - root.minBar, root.devicePixelRatio)
+      y: root.base === "top" ? geometry.height : geometry.y - root.minBar
       width: root.drawWidth
       height: root.minBar
       radius: root.cap === "round" ? height / 2 : 0

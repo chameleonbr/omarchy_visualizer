@@ -66,6 +66,24 @@ Visualizer.js    all the logic, and the only part with tests
   `gradient: cond ? null : Gradient { … }` is a syntax error, not a conditional
   gradient. Declare it with an id and reference it.
 
+- **Pin the base edge, derive the far end.** Rounding `y` and `height`
+  independently made the floor of every bar wander by a pixel as the value
+  changed, and the bars looked like they were standing on something loose.
+  `barGeometry` rounds the LENGTH once and derives the position from it; for
+  `mirror` the centre line is what gets pinned. The QML must not round again.
+
+- **A Repeater delegate must not reparent its children.** The segmented cap
+  needs the full height while a solid bar is only as tall as its value, and
+  reconciling those in one delegate meant `parent: bar.parent` — which rebinds
+  every child on every frame. At sixteen bars of eight segments that stalls the
+  shell outright. Two repeaters, one per case.
+
+- **Device names arrive after the setting changes.** `pactl` answers a moment
+  later, and the config had already been written with an empty source, so "mic"
+  silently fell back to cava's own default — the system audio. The config is
+  rewritten when the name lands, and the name is re-asked every time rather than
+  cached, because plugging in a headset changes it.
+
 - **The process is killed, not paused.** A paused cava still holds the audio
   capture open, which is most of what it costs.
 

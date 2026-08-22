@@ -251,13 +251,28 @@ Item {
     }
   }
 
+  // The device names arrive from pactl a moment after the setting changes, and
+  // the config was written before they did — so "mic" wrote `source = ` and
+  // cava fell back to its own default, which is the system audio. The config is
+  // rewritten when the name lands, which is the only moment it can be correct.
+  onMicSourceChanged: if (input === "mic" && micSource) writeConfig()
+  onSinkMonitorChanged: if (input === "both" && sinkMonitor) buildTimer.restart()
+
   Process { id: mixProcess }
   property var mixQueue: []
   property bool mixBuilt: false
 
   function applyInput() {
-    if (input === "system") { teardownMix(); return }
+    if (input === "system") {
+      teardownMix()
+      writeConfig()
+      return
+    }
 
+    // Re-asked every time rather than cached: the default source changes when
+    // someone plugs in a headset, and a name from ten minutes ago is a config
+    // that silently reads the wrong device.
+    sourceQuery.running = false
     sourceQuery.running = true
     if (input === "both") {
       sinkQuery.running = true

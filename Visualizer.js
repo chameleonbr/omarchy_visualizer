@@ -389,16 +389,29 @@ function isFill(name) { return FILLS.indexOf(name) >= 0 }
 
 // Where one bar sits, in the drawing area, for the three linear bases. Radial
 // has its own geometry below.
-function barGeometry(base, value, height, minHeight) {
+// The base edge is pinned and the far end moves; never the other way round.
+//
+// Rounding `y` and `height` independently was making the floor of every bar
+// wander by a pixel as the value changed — the bars looked like they were
+// standing on something loose. Round the LENGTH once, then derive the position
+// from it, and the base lands on the same pixel every frame.
+function barGeometry(base, value, height, minHeight, dpr) {
   var full = Math.max(0, Number(height) || 0)
   var floor = Math.max(1, Number(minHeight) || 1)
-  var length = Math.max(floor, (value / FRAME_MAX) * full)
+  var raw = Math.max(floor, (value / FRAME_MAX) * full)
+  var length = dpr ? floorToDevice(raw, dpr) : Math.round(raw)
 
   if (base === "top") return { y: 0, height: length }
+
   if (base === "mirror") {
-    var half = Math.max(floor / 2, length / 2)
-    return { y: full / 2 - half, height: half * 2 }
+    // The centre line is the pinned edge here, so the half is what gets
+    // rounded and the bar grows symmetrically around a fixed middle.
+    var half = dpr ? floorToDevice(Math.max(floor / 2, raw / 2), dpr)
+      : Math.round(Math.max(floor / 2, raw / 2))
+    var middle = dpr ? floorToDevice(full / 2, dpr) : Math.round(full / 2)
+    return { y: middle - half, height: half * 2 }
   }
+
   return { y: full - length, height: length }
 }
 

@@ -396,6 +396,46 @@ check("the axes are what the settings offer", () => {
   assert.strictEqual(isBase("sideways"), false)
 })
 
+check("the base edge never moves, whatever the value", () => {
+  // Rounding y and height independently made the floor of every bar wander by
+  // a pixel as the value changed, and the bars looked like they were standing
+  // on something loose. The LENGTH is rounded once and the position derived.
+  for (const dpr of [1, 0.85, 1.25, 1.5]) {
+    for (let value = 0; value <= 100; value += 3) {
+      const bottom = barGeometry("bottom", value, 40, 2, dpr)
+      assert.ok(Math.abs(bottom.y + bottom.height - 40) < 1e-9,
+        "bottom at dpr " + dpr + " value " + value + " -> " + (bottom.y + bottom.height))
+
+      const top = barGeometry("top", value, 40, 2, dpr)
+      assert.strictEqual(top.y, 0, "top at dpr " + dpr + " value " + value)
+    }
+  }
+})
+
+check("a mirrored bar grows around a fixed centre", () => {
+  for (const dpr of [1, 0.85, 1.5]) {
+    const centres = []
+    for (let value = 0; value <= 100; value += 7) {
+      const g = barGeometry("mirror", value, 40, 2, dpr)
+      centres.push(g.y + g.height / 2)
+    }
+    for (const centre of centres) {
+      assert.ok(Math.abs(centre - centres[0]) < 1e-9,
+        "dpr " + dpr + " centre moved: " + centre + " vs " + centres[0])
+    }
+  }
+})
+
+check("every bar edge lands on a device pixel", () => {
+  for (const dpr of [0.85, 1.25]) {
+    for (const value of [7, 23, 61, 94]) {
+      const g = barGeometry("bottom", value, 40, 2, dpr)
+      const whole = v => Math.abs(v * dpr - Math.round(v * dpr)) < 1e-6
+      assert.ok(whole(g.height), "height at " + value)
+    }
+  }
+})
+
 check("a bar grows from the edge its base names", () => {
   const bottom = barGeometry("bottom", 50, 100, 1)
   const top = barGeometry("top", 50, 100, 1)
