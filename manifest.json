@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "Andre Avila",
   "license": "MIT",
-  "description": "Audio spectrum in the bar, in five shapes and six palettes, with the same colours mirrored on your WLED lights.",
+  "description": "Audio spectrum in the bar, in four combinable style axes and nine palettes, with the same colours mirrored on your WLED lights.",
   "kinds": [
     "service",
     "bar-widget"
@@ -21,8 +21,18 @@
     "allowMultiple": false,
     "defaultSection": "center",
     "defaults": {
-      "shape": "bars",
+      "language": "auto",
+      "base": "bottom",
+      "cap": "flat",
+      "fill": "solid",
       "palette": "accent",
+      "input": "system",
+      "showPeaks": false,
+      "showWave": false,
+      "spread": 1,
+      "innerRadius": 0.3,
+      "peakFall": 1.5,
+      "solidColor": "",
       "gradientFrom": "",
       "gradientTo": "",
       "peakThreshold": 85,
@@ -33,13 +43,12 @@
       "barWidth": 3,
       "smoothing": 60,
       "floor": 3,
-      "pauseOnBattery": true,
       "pauseWhenSilent": true,
+      "pauseOnBattery": true,
       "wledEnabled": false,
       "wledRateHz": 10,
       "wledDevices": "",
-      "wledRestore": true,
-      "language": "auto"
+      "wledRestore": true
     },
     "schema": [
       {
@@ -55,166 +64,224 @@
         "defaultValue": "auto"
       },
       {
-        "key": "shape",
+        "key": "base",
         "type": "string",
-        "label": "Shape",
-        "description": "bars and mirror are the loudest; dots barely distracts; wave is the only one that costs a canvas.",
+        "label": "Bar base",
+        "description": "Where a bar grows from.",
         "options": [
-          "bars",
+          "bottom",
+          "top",
           "mirror",
-          "blocks",
-          "dots",
-          "wave"
+          "radial"
         ],
-        "defaultValue": "bars"
+        "defaultValue": "bottom"
+      },
+      {
+        "key": "cap",
+        "type": "string",
+        "label": "Bar cap",
+        "description": "What the end of a bar looks like.",
+        "options": [
+          "flat",
+          "round",
+          "segments"
+        ],
+        "defaultValue": "flat"
+      },
+      {
+        "key": "fill",
+        "type": "string",
+        "label": "Bar fill",
+        "description": "solid is one colour; barGradient ramps each bar through the palette; screenGradient anchors one ramp to the drawing area.",
+        "options": [
+          "solid",
+          "barGradient",
+          "screenGradient"
+        ],
+        "defaultValue": "solid"
       },
       {
         "key": "palette",
         "type": "string",
         "label": "Palette",
-        "description": "intensity and urgent move with the sound; spectrum and gradient are fixed to position.",
+        "description": "accent, foreground, intensity and urgent follow the theme; spectrum, rainbow and heat sweep; gradient and solid use colours you pick.",
         "options": [
           "accent",
           "foreground",
           "intensity",
           "spectrum",
+          "rainbow",
+          "heat",
           "gradient",
+          "solid",
           "urgent"
         ],
         "defaultValue": "accent"
       },
       {
+        "key": "input",
+        "type": "string",
+        "label": "Audio input",
+        "description": "system taps the speakers, mic the microphone, both builds a virtual mix device and tears it down on exit.",
+        "options": [
+          "system",
+          "mic",
+          "both"
+        ],
+        "defaultValue": "system"
+      },
+      {
+        "key": "showPeaks",
+        "type": "bool",
+        "label": "Peak markers",
+        "description": "A line left at each bar high-water mark.",
+        "defaultValue": false
+      },
+      {
+        "key": "showWave",
+        "type": "bool",
+        "label": "Wave",
+        "description": "An oscilloscope line under the bars. The only option that costs a canvas.",
+        "defaultValue": false
+      },
+      {
+        "key": "spread",
+        "type": "number",
+        "label": "Radial spread",
+        "description": "How much of the circle a radial base uses, 0..1.",
+        "defaultValue": 1
+      },
+      {
+        "key": "innerRadius",
+        "type": "number",
+        "label": "Radial inner radius",
+        "description": "Hole in the middle of a radial base, 0..1.",
+        "defaultValue": 0.3
+      },
+      {
+        "key": "peakFall",
+        "type": "number",
+        "label": "Peak fall",
+        "description": "How fast a peak marker sinks back, in units per frame.",
+        "defaultValue": 1.5
+      },
+      {
+        "key": "solidColor",
+        "type": "string",
+        "label": "Solid colour",
+        "description": "Hex, for the solid palette. Empty follows the theme accent.",
+        "defaultValue": ""
+      },
+      {
         "key": "gradientFrom",
         "type": "string",
         "label": "Gradient from",
-        "description": "Hex, for the gradient palette.",
+        "description": "Hex, for the gradient palette. Empty follows the theme.",
         "defaultValue": ""
       },
       {
         "key": "gradientTo",
         "type": "string",
         "label": "Gradient to",
-        "description": "Hex, for the gradient palette.",
+        "description": "Hex, for the gradient palette. Empty follows the theme.",
         "defaultValue": ""
       },
       {
         "key": "peakThreshold",
-        "type": "integer",
-        "label": "Peak threshold",
-        "description": "Where the urgent palette crosses over.",
-        "min": 50,
-        "max": 100,
-        "step": 5,
+        "type": "number",
+        "label": "Urgent threshold",
+        "description": "Level at which the urgent palette turns, 50..100.",
         "defaultValue": 85
       },
       {
         "key": "barCount",
-        "type": "integer",
+        "type": "number",
         "label": "Bars",
-        "min": 6,
-        "max": 24,
-        "step": 1,
+        "description": "How many bands cava reports, 6..24.",
         "defaultValue": 14
       },
       {
         "key": "segments",
-        "type": "integer",
-        "label": "Segments per bar",
-        "description": "For the blocks shape.",
-        "min": 3,
-        "max": 16,
-        "step": 1,
+        "type": "number",
+        "label": "Segments",
+        "description": "Blocks per bar when the cap is segments.",
         "defaultValue": 8
       },
       {
         "key": "framerate",
-        "type": "integer",
+        "type": "number",
         "label": "Frames per second",
-        "description": "30 looks the same as 60 at this size and costs half as much.",
-        "min": 10,
-        "max": 60,
-        "step": 5,
+        "description": "10..60. Lower is cheaper.",
         "defaultValue": 30
       },
       {
         "key": "widgetWidth",
-        "type": "integer",
-        "label": "Width (px)",
-        "min": 40,
-        "max": 300,
-        "step": 10,
+        "type": "number",
+        "label": "Widget width",
+        "description": "Width of the spectrum in the bar, in pixels.",
         "defaultValue": 90
       },
       {
         "key": "barWidth",
-        "type": "integer",
-        "label": "Bar width (px)",
-        "min": 1,
-        "max": 8,
-        "step": 1,
+        "type": "number",
+        "label": "Bar width",
+        "description": "Preferred bar width in the bar widget, in pixels.",
         "defaultValue": 3
       },
       {
         "key": "smoothing",
-        "type": "integer",
-        "label": "Release smoothing",
-        "description": "How gently a bar falls. The rise is always immediate.",
-        "min": 0,
-        "max": 95,
-        "step": 5,
+        "type": "number",
+        "label": "Fall",
+        "description": "How slowly a bar drops, 0..95.",
         "defaultValue": 60
       },
       {
         "key": "floor",
-        "type": "integer",
-        "label": "Silence floor",
-        "description": "Below this a bar reads as zero, so room noise does not keep it trembling.",
-        "min": 0,
-        "max": 20,
-        "step": 1,
+        "type": "number",
+        "label": "Floor",
+        "description": "Levels below this read as silence, 0..20.",
         "defaultValue": 3
       },
       {
         "key": "pauseWhenSilent",
-        "type": "boolean",
-        "label": "Pause when nothing is playing",
+        "type": "bool",
+        "label": "Pause when silent",
+        "description": "Stop cava when nothing is playing.",
         "defaultValue": true
       },
       {
         "key": "pauseOnBattery",
-        "type": "boolean",
+        "type": "bool",
         "label": "Pause on battery",
+        "description": "Stop cava on battery power.",
         "defaultValue": true
       },
       {
         "key": "wledEnabled",
-        "type": "boolean",
-        "label": "Mirror onto WLED",
-        "description": "Sends brightness and colour to the lights configured for the WLED plugin.",
+        "type": "bool",
+        "label": "WLED bridge",
+        "description": "Mirror the spectrum onto WLED lights.",
         "defaultValue": false
       },
       {
         "key": "wledRateHz",
-        "type": "integer",
+        "type": "number",
         "label": "WLED updates per second",
-        "description": "WLED over HTTP cannot follow the frame rate; above this the lamp stops answering.",
-        "min": 1,
-        "max": 20,
-        "step": 1,
+        "description": "1..20.",
         "defaultValue": 10
       },
       {
         "key": "wledDevices",
         "type": "string",
-        "label": "WLED hosts",
-        "description": "Comma separated. Empty means every configured light.",
+        "label": "WLED devices",
+        "description": "Comma-separated hosts or addresses.",
         "defaultValue": ""
       },
       {
         "key": "wledRestore",
-        "type": "boolean",
-        "label": "Restore the lights afterwards",
-        "description": "Puts them back when the music stops. Leaving a lamp frozen on a colour is the worst thing this can do.",
+        "type": "bool",
+        "label": "Restore WLED on exit",
+        "description": "Put the lights back the way they were.",
         "defaultValue": true
       }
     ]

@@ -654,6 +654,32 @@ check("the hint says what the letters on screen cannot", () => {
   assert.ok(hintText(true).indexOf("shift") >= 0)
 })
 
+// ---------------------------------------------------------------- manifest
+
+check("the manifest advertises exactly the settings that exist", () => {
+  const manifest = JSON.parse(fs.readFileSync(__dirname + "/manifest.json", "utf8"))
+  const widget = manifest.barWidget
+  const advertised = widget.schema.map((entry) => entry.key)
+
+  // The manifest is what a reviewer and the shell's settings UI read. It went
+  // stale once, still offering a `shape` axis that had been replaced by three.
+  assert.deepStrictEqual(advertised.filter((key) => DEFAULTS[key] === undefined), [],
+    "the manifest offers settings the plugin does not have")
+  assert.deepStrictEqual(Object.keys(DEFAULTS).filter((key) => advertised.indexOf(key) < 0), [],
+    "the plugin has settings the manifest does not offer")
+
+  for (const entry of widget.schema) {
+    assert.strictEqual(entry.defaultValue, DEFAULTS[entry.key],
+      entry.key + " is advertised with the wrong default")
+    assert.strictEqual(widget.defaults[entry.key], DEFAULTS[entry.key],
+      entry.key + " has a stale default")
+    if (entry.options) {
+      assert.ok(entry.options.indexOf(DEFAULTS[entry.key]) >= 0,
+        entry.key + " cannot be set to its own default")
+    }
+  }
+})
+
 // ------------------------------------------------------------------- fills
 
 const FILL_CTX = {
