@@ -372,6 +372,9 @@ Item {
 
   property var wledParsed: null
 
+  // The lights the WLED plugin knows about, for the settings pane to offer.
+  readonly property var wledNames: Vis.wledDeviceNames(wledParsed)
+
   readonly property var wledHosts: {
     if (!wledEnabled) return []
     return Vis.wledHostList(wledParsed, Vis.wledWantedNames(wledDevices))

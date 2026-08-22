@@ -780,9 +780,11 @@ check("a dimmed foot is darker than the tip, never brighter", () => {
 
 // ------------------------------------------------------------ accelerators
 
+const ALL_ROWS = SETTING_ROWS.concat(WLED_ROWS)
+
 check("every row has its own letter and nothing else claims it", () => {
   const taken = new Set(["s"])   // s opens and closes the pane
-  for (const row of SETTING_ROWS) {
+  for (const row of ALL_ROWS) {
     assert.ok(row.accel, row.key + " has no accelerator")
     assert.strictEqual(row.accel, row.accel.toLowerCase(), "accelerators are lower case")
     assert.ok(!taken.has(row.accel), row.accel + " is claimed twice (" + row.key + ")")
@@ -795,7 +797,8 @@ check("every row has its own letter and nothing else claims it", () => {
 })
 
 check("every row is a real setting with real values", () => {
-  for (const row of SETTING_ROWS) {
+  for (const row of ALL_ROWS) {
+    if (row.key === "wledDevices") continue   // its values come from the config
     assert.notStrictEqual(DEFAULTS[row.key], undefined, row.key + " is not a setting")
     assert.ok(row.values.length >= 2, row.key + " has nothing to cycle through")
     assert.ok(row.values.indexOf(DEFAULTS[row.key]) >= 0,
@@ -819,12 +822,53 @@ check("a label without its letter shows it rather than losing it", () => {
 check("every label in every language still shows its letter", () => {
   for (const name of Object.keys(STRINGS)) {
     setLanguage(name)
-    for (const row of SETTING_ROWS) {
+    for (const row of ALL_ROWS) {
       const split = splitAccel(t("row." + row.key), row.accel)
       assert.strictEqual(split.letter.toLowerCase(), row.accel,
         name + "/" + row.key + " lost its accelerator")
     }
   }
+  setLanguage("en")
+})
+
+check("the wled rows are offered only when there is a light to point at", () => {
+  const names = wledDeviceNames({ devices: [
+    { name: "desk", host: "wled-desk" },
+    { host: "wled-shelf" },
+    { name: "desk" },
+    {}
+  ] })
+  assert.deepStrictEqual(names, ["desk", "wled-shelf"], "named once, and only if named")
+  assert.deepStrictEqual(wledDeviceNames(null), [], "no config, no rows")
+
+  const rows = wledRows(names)
+  assert.strictEqual(rows.length, WLED_ROWS.length)
+  const devices = rows.filter((row) => row.key === "wledDevices")[0]
+  assert.deepStrictEqual(devices.values, ["", "desk", "wled-shelf"],
+    "empty is every light the config lists")
+  assert.deepStrictEqual(wledRows([])[1].values, [""], "nothing to narrow to")
+})
+
+check("a device list longer than the ceiling offers no more than the ceiling", () => {
+  const devices = []
+  for (let i = 0; i < 5000; i++) devices.push({ name: "lamp-" + i })
+  assert.strictEqual(wledDeviceNames({ devices: devices }).length, MAX_WLED_DEVICES)
+})
+
+check("a letter for a row that is not on screen does nothing", () => {
+  assert.strictEqual(rowForAccel("d"), null, "no wled rows in the default list")
+  assert.strictEqual(rowForAccel("d", SETTING_ROWS.concat(wledRows([]))).key, "wledEnabled")
+  assert.strictEqual(rowForAccel("p", SETTING_ROWS.concat(wledRows([]))).key, "palette",
+    "the axes are still there")
+})
+
+check("a light shows as whatever its owner called it", () => {
+  assert.strictEqual(value("wledDevices", "kitchen"), "kitchen")
+  assert.strictEqual(value("wledDevices", ""), "all")
+  setLanguage("pt")
+  assert.strictEqual(value("wledDevices", "kitchen"), "kitchen", "a name is not translated")
+  assert.strictEqual(value("wledDevices", ""), "todos")
+  assert.strictEqual(value("base", "mirror"), "espelho", "a value still is")
   setLanguage("en")
 })
 

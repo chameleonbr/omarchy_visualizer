@@ -50,6 +50,13 @@ Visualizer.js    all the logic, and the only part with tests
 
 ## Things that will bite you
 
+- **`SETTING_ROWS` is not the whole list any more.** The WLED rows live in
+  `WLED_ROWS` and only join the pane when `wled.json` names a light, so a
+  letter has to be resolved against the rows *on screen* — `Settings.cycleAccel`
+  — rather than against every row that exists. Resolving against the full list
+  would flip a setting nobody can see. Any new accelerator has to be unique
+  across both lists; the check covers the concatenation.
+
 - **`FileView` reads on demand, and that is the only gate there is.** There is
   no size ceiling on the type, so `SizedFile` keeps `preload` off until a
   `stat` probe has passed and only then opens it — the flag *is* the gate. Two

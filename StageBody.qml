@@ -82,10 +82,10 @@ Item {
       return
     }
 
-    var row = Vis.rowForAccel(typed)
-    if (row) {
-      // Shift walks back, which matters on a nine-value axis like the palette.
-      settingsPane.cycleSetting(row, (event.modifiers & Qt.ShiftModifier) !== 0)
+    // The pane owns the lookup: which letters exist depends on which rows it
+    // is showing. Shift walks back, which matters on a nine-value axis like
+    // the palette.
+    if (settingsPane.cycleAccel(typed, (event.modifiers & Qt.ShiftModifier) !== 0)) {
       event.accepted = true
     }
   }

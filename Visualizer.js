@@ -878,10 +878,49 @@ var SETTING_ROWS = [
 // palette asks for them.
 var COLOR_ACCELS = ["1", "2", "3"]
 
-function rowForAccel(accel) {
+// The WLED rows are their own list because they are only worth showing when
+// there is a light to point them at. A pane offering a bridge to nothing
+// teaches people its controls are decoration.
+var WLED_ROWS = [
+  { key: "wledEnabled", accel: "d", values: [false, true] },
+  // Filled in from the config: the values are the lights someone actually
+  // has, and "" is all of them.
+  { key: "wledDevices", accel: "v", values: [""] },
+  { key: "wledRateHz", accel: "t", values: [5, 10, 15, 20] },
+  { key: "wledRestore", accel: "o", values: [false, true] }
+]
+
+// The names in the WLED plugin's config, to the same depth the host list is
+// read: a name past the ceiling is not selectable because it was never seen.
+function wledDeviceNames(parsed) {
+  var names = []
+  var devices = (parsed && parsed.devices) || []
+  var limit = Math.min(devices.length, MAX_WLED_DEVICES)
+  for (var i = 0; i < limit; i++) {
+    var device = devices[i] || {}
+    var name = device.name || device.host
+    if (name && names.indexOf(name) < 0) names.push(name)
+  }
+  return names
+}
+
+function wledRows(names) {
+  var rows = []
+  for (var i = 0; i < WLED_ROWS.length; i++) {
+    var row = WLED_ROWS[i]
+    if (row.key !== "wledDevices") { rows.push(row); continue }
+    rows.push({ key: row.key, accel: row.accel, values: [""].concat(names || []) })
+  }
+  return rows
+}
+
+// Over the rows on screen rather than every row there is: a letter for a
+// setting the pane is not showing must do nothing.
+function rowForAccel(accel, rows) {
+  var list = rows || SETTING_ROWS
   var wanted = String(accel || "").toLowerCase()
-  for (var i = 0; i < SETTING_ROWS.length; i++) {
-    if (SETTING_ROWS[i].accel === wanted) return SETTING_ROWS[i]
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].accel === wanted) return list[i]
   }
   return null
 }

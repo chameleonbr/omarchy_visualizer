@@ -172,9 +172,14 @@ rather than collapsing and reflowing everything beside it.
 
 ## WLED
 
-Turn on `wledEnabled` and the lights configured for the
+Turn on `wled` in the settings pane and the lights configured for the
 [WLED plugin](https://github.com/chameleonbr/omarchy_wled) show the colour the
 bar is showing. That file is read, never written — it belongs to that plugin.
+
+The pane grows four rows when that file names a light: whether the bridge is
+on, which light to drive, how fast, and whether to put it back when the music
+stops. `devices` cycles through the names from that file — the ones their
+owner gave them, untranslated — and `all` means every light it lists.
 
 Three things this gets right, and they are all about the hardware:
 
@@ -198,7 +203,7 @@ Everything is in the widget's settings screen. The ones worth knowing:
 
 | Setting | Default | Why you might change it |
 |---|---|---|
-| `shape` · `palette` | `bars` · `accent` | taste |
+| `base` · `cap` · `fill` · `palette` | `bottom` · `flat` · `solid` · `accent` | taste |
 | `barCount` | 14 | more bands, finer detail, more to draw |
 | `smoothing` | 60 | how gently a bar falls; the rise is always immediate |
 | `floor` | 3 | below this a band reads as zero, so room noise lets it rest |
@@ -206,6 +211,7 @@ Everything is in the widget's settings screen. The ones worth knowing:
 | `pauseWhenSilent` · `pauseOnBattery` | on | the two guards |
 | `wledEnabled` | off | mirror onto the lights |
 | `wledRateHz` | 10 | how fast the lamp is asked to follow |
+| `wledDevices` | all | narrow the bridge to one light |
 
 ## Development
 
@@ -238,12 +244,18 @@ colour inside its own label:
 
 | Key | Row | Key | Row |
 |---|---|---|---|
-| `b` | base | `w` | wave |
-| `c` | cap | `a` | bars |
-| `f` | fill | `l` | fall |
-| `p` | palette | `r` | fps |
-| `i` | input | `g` | language |
-| `e` | peak | | |
+| `b` | base | `r` | fps |
+| `c` | cap | `g` | language |
+| `f` | fill | `d` | wled |
+| `p` | palette | `v` | devices |
+| `i` | input | `t` | wled rate |
+| `e` | peak | `o` | restore on stop |
+| `w` | wave | `a` | bars |
+| `l` | fall | | |
+
+The last four are only there when the WLED plugin's config names a light, and
+so are their letters: on a machine with no lights `d` does nothing rather than
+flipping a setting nobody can see.
 
 Hold `shift` to walk an axis backwards, which is what makes a nine-value
 palette usable from the keyboard. `1`, `2` and `3` open the colour picker for

@@ -22,6 +22,14 @@ Item {
   readonly property string palette: service ? service.value("palette") : "accent"
   readonly property var colorKeys: Vis.colorKeysFor(palette)
 
+  // The WLED rows join the list only when the WLED plugin's config names a
+  // light, on the same principle as the colour rows: a control that cannot
+  // change anything is worse than an absent one.
+  readonly property var wledNames: service ? service.wledNames : []
+  readonly property var rows: root.wledNames.length > 0
+    ? Vis.SETTING_ROWS.concat(Vis.wledRows(root.wledNames))
+    : Vis.SETTING_ROWS
+
   property string editing: ""
 
   // `I18n.t()` is a function call, so nothing about it tells QML to
@@ -65,6 +73,16 @@ Item {
   function cycleSetting(row, backwards) {
     if (!root.service) return
     root.set(row.key, Vis.cycle(row.values, root.service.value(row.key), backwards ? -1 : 1))
+  }
+
+  // Letters are resolved against the rows on screen, so `d` does nothing at
+  // all on a machine with no lights rather than quietly flipping a setting
+  // nobody can see. Answers whether it handled the key.
+  function cycleAccel(typed, backwards) {
+    var row = Vis.rowForAccel(typed, root.rows)
+    if (!row) return false
+    cycleSetting(row, backwards)
+    return true
   }
 
   // Which colour row a digit opens. The list is whatever the current palette
@@ -117,7 +135,7 @@ Item {
       }
 
       Repeater {
-        model: Vis.SETTING_ROWS
+        model: root.rows
 
         Rectangle {
           required property var modelData

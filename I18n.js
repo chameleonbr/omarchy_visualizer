@@ -54,6 +54,15 @@ var STRINGS = {
     "row.smoothing": "fall",
     "row.framerate": "fps",
     "row.language": "language",
+    "row.wledEnabled": "wled",
+    "row.wledDevices": "devices",
+    "row.wledRateHz": "wled rate",
+    "row.wledRestore": "restore on stop",
+
+    // The empty device setting is every light the config lists, so it says so
+    // rather than showing as blank. A named device shows as its own name:
+    // nobody translates what someone called their lamp.
+    "wledDevices.": "all",
     "row.gradientFrom": "gradient from",
     "row.gradientTo": "gradient to",
     "row.solidColor": "colour",
@@ -122,6 +131,12 @@ var STRINGS = {
     "row.smoothing": "queda",
     "row.framerate": "fps",
     "row.language": "idioma",
+    "row.wledEnabled": "wled",
+    "row.wledDevices": "dispositivos",
+    "row.wledRateHz": "taxa wled",
+    "row.wledRestore": "restaurar ao parar",
+
+    "wledDevices.": "todos",
     "row.gradientFrom": "gradiente de",
     "row.gradientTo": "gradiente até",
     "row.solidColor": "cor",
@@ -200,7 +215,13 @@ function value(row, raw) {
   if (raw === true) return t("bool.true")
   if (raw === false) return t("bool.false")
   if (typeof raw === "number") return String(raw)
-  return t(row + "." + raw)
+
+  // A value this table has never heard of is something the user typed — the
+  // name of a light, say. It shows as what they typed rather than as the key
+  // that was looked for.
+  var key = row + "." + raw
+  var text = t(key)
+  return text === key ? String(raw) : text
 }
 
 // The whole idle message, so the fix line stays attached to the reason it
