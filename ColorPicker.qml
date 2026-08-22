@@ -17,6 +17,8 @@ Item {
   property color fallback: Color.accent
 
   signal picked(string hex)
+  // Asked to hand the keyboard back, without changing anything.
+  signal dismissed()
 
   readonly property var parsed: Vis.parseHex(value)
   // Editing starts from whatever the setting already holds; an unset or broken
@@ -188,6 +190,19 @@ Item {
       TextField {
         id: hexField
         anchors.verticalCenter: parent.verticalCenter
+
+        // Only on a click. A field that takes focus by appearing would swallow
+        // every accelerator for as long as the picker is open, and the letters
+        // painted in the pane next to it would silently stop working.
+        focus: false
+
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape) {
+            root.dismissed()
+            event.accepted = true
+          }
+        }
+
         width: parent.width - Style.space(34)
         text: Vis.toHex(Vis.hsvToRgb(root.hue, root.sat, root.val))
         foreground: Color.foreground

@@ -39,7 +39,46 @@ Item {
     return I18n.value(key, raw)
   }
 
+  // The label with its accelerator painted in the accent colour.
+  //
+  // `Vis.toHex` rather than the colour itself: a QML color stringifies to
+  // `#aarrggbb`, and rich text silently ignores an eight-digit colour — the
+  // letter comes out the same grey as the rest and the whole feature looks
+  // like it was never wired up.
+  //
+  // Escaped first: StyledText would read a `<` in a translation as a tag.
+  readonly property string accentHex: Vis.toHex(Color.accent)
+
+  function accelLabel(key, accel) {
+    var parts = Vis.splitAccel(root.tr(key), accel)
+    return escapeMarkup(parts.before)
+      + "<font color=\"" + root.accentHex + "\"><b>" + escapeMarkup(parts.letter) + "</b></font>"
+      + escapeMarkup(parts.after)
+  }
+
+  function escapeMarkup(text) {
+    return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  }
+
+  // Cycling from the keyboard rather than the mouse. Shift walks back, which
+  // matters on a nine-value axis like the palette.
+  function cycleSetting(row, backwards) {
+    if (!root.service) return
+    root.set(row.key, Vis.cycle(row.values, root.service.value(row.key), backwards ? -1 : 1))
+  }
+
+  // Which colour row a digit opens. The list is whatever the current palette
+  // reads, so `1` is the first one on screen rather than a fixed setting.
+  function openColorAt(index) {
+    var keys = root.colorKeys
+    if (index < 0 || index >= keys.length) return
+    root.editing = root.editing === keys[index] ? "" : keys[index]
+  }
+
   signal closeRequested()
+  // The pane is done with the keyboard: whoever handles the accelerators
+  // should take it back.
+  signal focusReturned()
 
   function set(key, value) {
     if (!service) return
@@ -78,22 +117,7 @@ Item {
       }
 
       Repeater {
-        model: [
-          // `key` is both the setting and the translation namespace: the row
-          // label is `row.<key>` and each value is `<key>.<value>`. One name
-          // rather than three keeps a new axis from arriving half-translated.
-          { key: "base", values: Vis.BASES },
-          { key: "cap", values: Vis.CAPS },
-          { key: "fill", values: Vis.FILLS },
-          { key: "palette", values: Vis.PALETTES },
-          { key: "input", values: Vis.INPUTS },
-          { key: "showPeaks", values: [false, true] },
-          { key: "showWave", values: [false, true] },
-          { key: "barCount", values: [8, 12, 14, 16, 20, 24] },
-          { key: "smoothing", values: [0, 30, 60, 80, 95] },
-          { key: "framerate", values: [15, 30, 45, 60] },
-          { key: "language", values: Vis.LANGUAGES }
-        ]
+        model: Vis.SETTING_ROWS
 
         Rectangle {
           required property var modelData
@@ -126,8 +150,12 @@ Item {
             anchors.leftMargin: Style.space(6)
             anchors.rightMargin: Style.space(6)
 
+            // The accelerator is one letter of the label in the accent
+            // colour. StyledText rather than three Text items so it elides as
+            // one string when the pane is narrow.
             Text {
-              text: root.tr("row." + modelData.key)
+              textFormat: Text.StyledText
+              text: root.accelLabel("row." + modelData.key, modelData.accel)
               color: Qt.darker(Color.foreground, 1.4)
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -158,7 +186,9 @@ Item {
         Column {
           required property string modelData
 
-          readonly property string label: root.tr("row." + modelData)
+          readonly property int digit: root.colorKeys.indexOf(modelData)
+          readonly property string label: root.accelLabel("row." + modelData,
+            Vis.COLOR_ACCELS[digit] || "")
           readonly property string value:
             root.service ? String(root.service.value(modelData) || "") : ""
           readonly property bool open: root.editing === modelData
@@ -190,6 +220,7 @@ Item {
 
               Text {
                 anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.StyledText
                 text: parent.parent.parent.label
                 color: Qt.darker(Color.foreground, 1.4)
                 font.family: Style.font.family
@@ -230,6 +261,7 @@ Item {
             value: parent.value
             fallback: Color.accent
             onPicked: function(hex) { root.set(parent.modelData, hex) }
+            onDismissed: root.focusReturned()
           }
         }
       }

@@ -7,6 +7,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "Visualizer.js" as Vis
 import "I18n.js" as I18n
 
 Item {
@@ -15,13 +16,11 @@ Item {
   property var widget: null
   readonly property var service: widget ? widget.service : null
 
-  property bool fullscreen: false
   // Read-only here. The stage owns it, because it has to survive this body
   // being destroyed with its window.
   property bool settingsOpen: false
 
   signal closeRequested()
-  signal fullscreenToggleRequested()
   signal settingsToggleRequested()
 
   // `I18n.t()` is a function call, so nothing about it tells QML to
@@ -46,25 +45,47 @@ Item {
 
   focus: true
 
+  // Opening the pane hands the keyboard back, so the accelerators work whether
+  // it was opened with `s`, with the widget, or over IPC.
+  onSettingsOpenChanged: if (settingsOpen) forceActiveFocus()
+
   Keys.onPressed: function(event) {
     if (event.key === Qt.Key_Escape) {
       // One layer at a time: escaping the settings leaves the visualiser up.
-      // The mode is a setting rather than a state, so escape does not silently
-      // undo it — it closes.
       if (body.settingsOpen) body.settingsToggleRequested()
       else body.closeRequested()
       event.accepted = true
       return
     }
 
-    if (event.key === Qt.Key_F) {
-      body.fullscreenToggleRequested()
+    if (event.key === Qt.Key_S) {
+      body.settingsToggleRequested()
       event.accepted = true
       return
     }
 
-    if (event.key === Qt.Key_S) {
-      body.settingsToggleRequested()
+    // Every other letter belongs to a setting, and only while the pane is
+    // open. Cycling a palette from a key nobody can see the meaning of is a
+    // visualiser that changes itself for no stated reason.
+    if (!body.settingsOpen) return
+
+    var typed = event.text
+    if (!typed) return
+
+    var digit = Vis.COLOR_ACCELS.indexOf(typed)
+    if (digit >= 0) {
+      settingsPane.openColorAt(digit)
+      // The picker is opened for the mouse; the keyboard stays here so the
+      // next letter is still a setting.
+      body.forceActiveFocus()
+      event.accepted = true
+      return
+    }
+
+    var row = Vis.rowForAccel(typed)
+    if (row) {
+      // Shift walks back, which matters on a nine-value axis like the palette.
+      settingsPane.cycleSetting(row, (event.modifiers & Qt.ShiftModifier) !== 0)
       event.accepted = true
     }
   }
@@ -138,7 +159,7 @@ Item {
         anchors.bottom: parent.bottom
         text: {
           var epoch = body.languageEpoch
-          return I18n.hintText(body.fullscreen)
+          return I18n.hintText(body.settingsOpen)
         }
         color: Qt.darker(Color.foreground, 1.8)
         font.family: Style.font.family
@@ -165,6 +186,7 @@ Item {
       readonly property int pad: Style.space(14)
 
       onCloseRequested: body.settingsToggleRequested()
+      onFocusReturned: body.forceActiveFocus()
     }
   }
 }

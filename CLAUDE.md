@@ -162,3 +162,20 @@ with its window.
 on the language.** Every file that renders a string reads `service.languageEpoch`
 first, inside a `tr()` helper. Without that read the language setting appears
 to do nothing while every piece works when tested alone.
+
+**`Vis.SETTING_ROWS` is the one list.** The pane renders from it and
+`StageBody.qml`'s key handler looks accelerators up in it, so an axis cannot
+arrive in one and not the other. The checks assert every row is a real setting
+whose default is inside its own value list, and that no two rows — or the
+colour digits, or `s` — claim the same key.
+
+**A QML color stringifies to `#aarrggbb`, and rich text ignores it.** The
+accelerator letter is painted with `<font color=...>`, so it goes through
+`Vis.toHex` first. With the raw colour the letter comes out the same grey as
+the label and the whole feature looks like it was never wired up — no warning,
+no error.
+
+**A focused `TextField` swallows every accelerator.** The colour picker's hex
+field is `focus: false` and takes the keyboard only on a click; escape inside
+it hands focus back through `dismissed()`. Opening a picker with a digit
+leaves focus on the body deliberately — the next letter is still a setting.

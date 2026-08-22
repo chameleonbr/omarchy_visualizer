@@ -3,9 +3,12 @@
 // It used to be a layer-shell surface, which is why it hovered over everything
 // and could never be anything but a card floating in the middle of an output.
 // A `FloatingWindow` is a normal toplevel: the compositor tiles it, floats it,
-// moves it between workspaces and applies whatever window rules the user
-// already wrote. None of that is this plugin's business, so `f` is left to do
-// the one thing the compositor cannot guess — fullscreen, and back.
+// moves it between workspaces, fullscreens it and applies whatever window
+// rules the user already wrote. None of that is this plugin's business, which
+// leaves every letter free for the settings.
+//
+// `toggleFullscreen` stays for the IPC target, so a keybind can reach it
+// without the plugin claiming a key of its own.
 
 import QtQuick
 import Quickshell
@@ -61,11 +64,9 @@ Item {
       StageBody {
         anchors.fill: parent
         widget: root.widget
-        fullscreen: toplevel.fullscreen
         settingsOpen: root.settingsOpen
         onSettingsToggleRequested: root.settingsOpen = !root.settingsOpen
         onCloseRequested: root.close()
-        onFullscreenToggleRequested: root.toggleFullscreen()
       }
     }
   }

@@ -699,3 +699,63 @@ function wledRestorePayload(previous) {
     seg: previous.seg || []
   })
 }
+
+// ------------------------------------------------------------- the rows
+//
+// The settings pane and the key handler read the same list, so a new axis
+// cannot arrive in one and not the other. It lives at the end of the file
+// because it names every axis above it.
+//
+// `accel` is fixed across languages. Moving the keys when someone switches
+// language would be the one thing worse than not having them: muscle memory
+// outlives a translation table. It is drawn as a coloured letter inside the
+// label where the label contains it, and as `label (k)` where it does not —
+// which is most of Portuguese, and `fps` in any language.
+//
+// `key` is also the translation namespace: the label is `row.<key>` and each
+// value is `<key>.<value>`.
+var SETTING_ROWS = [
+  { key: "base", accel: "b", values: BASES },
+  { key: "cap", accel: "c", values: CAPS },
+  { key: "fill", accel: "f", values: FILLS },
+  { key: "palette", accel: "p", values: PALETTES },
+  { key: "input", accel: "i", values: INPUTS },
+  { key: "showPeaks", accel: "e", values: [false, true] },
+  { key: "showWave", accel: "w", values: [false, true] },
+  { key: "barCount", accel: "a", values: [8, 12, 14, 16, 20, 24] },
+  { key: "smoothing", accel: "l", values: [0, 30, 60, 80, 95] },
+  { key: "framerate", accel: "r", values: [15, 30, 45, 60] },
+  { key: "language", accel: "g", values: LANGUAGES }
+]
+
+// The colour rows open a picker instead of cycling, and there is no letter
+// left that is not already an axis, so they take digits in the order the
+// palette asks for them.
+var COLOR_ACCELS = ["1", "2", "3"]
+
+function rowForAccel(accel) {
+  var wanted = String(accel || "").toLowerCase()
+  for (var i = 0; i < SETTING_ROWS.length; i++) {
+    if (SETTING_ROWS[i].accel === wanted) return SETTING_ROWS[i]
+  }
+  return null
+}
+
+// The label split around its accelerator, so the pane can paint that one letter
+// in the accent colour. A label that does not contain the letter gets it in
+// brackets rather than losing it.
+function splitAccel(label, accel) {
+  var text = String(label === undefined || label === null ? "" : label)
+  var letter = String(accel || "")
+  if (!letter) return { before: text, letter: "", after: "" }
+
+  var at = text.toLowerCase().indexOf(letter.toLowerCase())
+  if (at < 0) return { before: text + " (", letter: letter, after: ")" }
+
+  return {
+    before: text.slice(0, at),
+    // The label's own casing, not the key's: a capitalised label keeps it.
+    letter: text.slice(at, at + letter.length),
+    after: text.slice(at + letter.length)
+  }
+}

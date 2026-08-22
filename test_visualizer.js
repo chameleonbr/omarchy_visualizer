@@ -647,9 +647,68 @@ check("the idle message keeps its fix line attached to its reason", () => {
   assert.strictEqual(idleText("nonsense"), "", "an unknown reason says nothing")
 })
 
-check("the hint says what f will do, not what it just did", () => {
-  assert.ok(hintText(false).indexOf("fullscreen") >= 0)
-  assert.ok(hintText(true).indexOf("windowed") >= 0)
+check("the hint says what the letters on screen cannot", () => {
+  assert.ok(hintText(false).indexOf("settings") >= 0)
+  assert.strictEqual(hintText(false).indexOf("shift"), -1,
+    "nothing to reverse with the pane shut")
+  assert.ok(hintText(true).indexOf("shift") >= 0)
+})
+
+// ------------------------------------------------------------ accelerators
+
+check("every row has its own letter and nothing else claims it", () => {
+  const taken = new Set(["s"])   // s opens and closes the pane
+  for (const row of SETTING_ROWS) {
+    assert.ok(row.accel, row.key + " has no accelerator")
+    assert.strictEqual(row.accel, row.accel.toLowerCase(), "accelerators are lower case")
+    assert.ok(!taken.has(row.accel), row.accel + " is claimed twice (" + row.key + ")")
+    taken.add(row.accel)
+  }
+  for (const digit of COLOR_ACCELS) {
+    assert.ok(!taken.has(digit), digit + " is claimed twice")
+    taken.add(digit)
+  }
+})
+
+check("every row is a real setting with real values", () => {
+  for (const row of SETTING_ROWS) {
+    assert.notStrictEqual(DEFAULTS[row.key], undefined, row.key + " is not a setting")
+    assert.ok(row.values.length >= 2, row.key + " has nothing to cycle through")
+    assert.ok(row.values.indexOf(DEFAULTS[row.key]) >= 0,
+      row.key + " cannot cycle back to its own default")
+  }
+})
+
+check("the accelerator is a letter of the label where there is one", () => {
+  const split = splitAccel("palette", "p")
+  assert.deepStrictEqual(split, { before: "", letter: "p", after: "alette" })
+  assert.deepStrictEqual(splitAccel("language", "g"),
+    { before: "lan", letter: "g", after: "uage" })
+})
+
+check("a label without its letter shows it rather than losing it", () => {
+  const split = splitAccel("fps", "r")
+  assert.strictEqual(split.before + split.letter + split.after, "fps (r)")
+  assert.strictEqual(split.letter, "r", "still one letter to paint")
+})
+
+check("every label in every language still shows its letter", () => {
+  for (const name of Object.keys(STRINGS)) {
+    setLanguage(name)
+    for (const row of SETTING_ROWS) {
+      const split = splitAccel(t("row." + row.key), row.accel)
+      assert.strictEqual(split.letter.toLowerCase(), row.accel,
+        name + "/" + row.key + " lost its accelerator")
+    }
+  }
+  setLanguage("en")
+})
+
+check("a key that is nobody's setting does nothing", () => {
+  assert.strictEqual(rowForAccel("z"), null)
+  assert.strictEqual(rowForAccel(""), null)
+  assert.strictEqual(rowForAccel(undefined), null)
+  assert.strictEqual(rowForAccel("P").key, "palette", "shift-P is still the palette")
 })
 
 check("the tooltip is a template, not translated fragments glued together", () => {

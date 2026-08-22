@@ -76,7 +76,9 @@ Click the widget and the spectrum gets a window of its own.
 
 | Key | What it does |
 |---|---|
-| `f` | fullscreen, and back |
+| `b` `c` `f` `p` `i` `e` `w` `a` `l` `r` `g` | cycle one setting, while the pane is open |
+| `shift` + any of those | cycle it backwards |
+| `1` `2` `3` | open the colour picker for the row of that number |
 | `s` | settings, beside the spectrum |
 | `esc` | steps back one layer — out of the settings, then closed |
 
@@ -90,8 +92,10 @@ windowrule = size 900 400, title:^(Visualizer)$
 windowrule = center, title:^(Visualizer)$
 ```
 
-`f` does the one thing a window rule cannot decide for you: fullscreen, and
-back.
+Fullscreen is your compositor's too — Omarchy binds it to `super` + `F` — so
+the plugin claims no key for it and every letter is free for the settings.
+`omarchy-shell avila.visualizer fullscreen` is there if you would rather bind
+your own.
 
 The settings open **beside** the spectrum, not over it — every control in them
 is previewed by the visualiser next to it, so covering it would defeat the
@@ -216,3 +220,26 @@ the pane, so switching it is one click and takes effect immediately.
 Adding a language is one entry in `I18n.js`. The checks fail if it is missing
 a key English has, or has one English does not, or leaves any setting value
 without a word.
+
+## The keyboard
+
+Open the pane with `s` and every row has a letter, painted in the accent
+colour inside its own label:
+
+| Key | Row | Key | Row |
+|---|---|---|---|
+| `b` | base | `w` | wave |
+| `c` | cap | `a` | bars |
+| `f` | fill | `l` | fall |
+| `p` | palette | `r` | fps |
+| `i` | input | `g` | language |
+| `e` | peak | | |
+
+Hold `shift` to walk an axis backwards, which is what makes a nine-value
+palette usable from the keyboard. `1`, `2` and `3` open the colour picker for
+the colour rows in the order they appear — the palette decides how many there
+are, so `1` is always the first one on screen.
+
+The letters do not move when you change language. Muscle memory outlives a
+translation table, so `fps` shows `fps (r)` in English and Portuguese alike
+where the label has no `r` of its own to paint.

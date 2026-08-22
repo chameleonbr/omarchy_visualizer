@@ -33,13 +33,12 @@ var STRINGS = {
     "idle.battery": "paused on battery",
     "idle.silent": "nothing playing",
 
-    "hint.fullscreen": "f  fullscreen",
-    "hint.windowed": "f  windowed",
     "hint.settings": "s  settings",
     "hint.close": "esc  close",
+    "hint.reverse": "shift  goes back",
 
     "settings.title": "Settings",
-    "settings.help": "click a value to change it · right button goes back",
+    "settings.help": "click a value or press its letter · right button and shift go back",
     "settings.themed": "theme",
 
     "row.base": "base",
@@ -100,13 +99,12 @@ var STRINGS = {
     "idle.battery": "pausado na bateria",
     "idle.silent": "nada tocando",
 
-    "hint.fullscreen": "f  tela cheia",
-    "hint.windowed": "f  janela",
     "hint.settings": "s  ajustes",
     "hint.close": "esc  fechar",
+    "hint.reverse": "shift  volta",
 
     "settings.title": "Ajustes",
-    "settings.help": "clique num valor para trocar · botão direito volta",
+    "settings.help": "clique num valor ou aperte a letra · botão direito e shift voltam",
     "settings.themed": "tema",
 
     "row.base": "base",
@@ -210,7 +208,10 @@ function idleText(reason) {
   return ""
 }
 
-function hintText(fullscreen) {
-  return [t(fullscreen ? "hint.windowed" : "hint.fullscreen"),
-    t("hint.settings"), t("hint.close")].join("     ")
+// With the pane open the letters on screen are the instructions, so the hint
+// only has to say the one thing they cannot show: that shift reverses them.
+function hintText(settingsOpen) {
+  var parts = [t("hint.settings"), t("hint.close")]
+  if (settingsOpen) parts.unshift(t("hint.reverse"))
+  return parts.join("     ")
 }
