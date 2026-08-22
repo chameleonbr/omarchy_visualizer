@@ -24,9 +24,66 @@ function configPath(runtimeDir) {
   return configDir(runtimeDir) + "/cava.conf"
 }
 
+// --------------------------------------------------------- audio input
+//
+// cava reads one device. "What the machine is playing" is the monitor of the
+// default sink, which cava's `auto` already picks; a microphone is a source
+// like any other. Hearing both at once is not a cava setting at all — it needs
+// a device that does not exist yet, and the plugin builds one.
+
+var INPUTS = ["system", "mic", "both"]
+
+function isInput(name) {
+  return INPUTS.indexOf(name) >= 0
+}
+
+var MIX_SINK = "omarchy_visualizer_mix"
+
+function inputSource(input, micSource) {
+  if (input === "mic") return micSource || "auto"
+  if (input === "both") return MIX_SINK + ".monitor"
+  return "auto"
+}
+
+// The virtual device for "both": a sink nothing plays to directly, fed by two
+// loopbacks — one from what you hear, one from the microphone. cava then reads
+// its monitor and hears the sum.
+//
+// Built only while it is needed and torn down after, because leaving a stray
+// sink in someone's audio graph is the kind of mess that outlives the widget.
+function mixSetupCommands(sinkMonitor, micSource) {
+  return [
+    ["pactl", "load-module", "module-null-sink",
+      "sink_name=" + MIX_SINK, "sink_properties=device.description=Visualizer"],
+    ["pactl", "load-module", "module-loopback",
+      "source=" + sinkMonitor, "sink=" + MIX_SINK, "latency_msec=50"],
+    ["pactl", "load-module", "module-loopback",
+      "source=" + micSource, "sink=" + MIX_SINK, "latency_msec=50"]
+  ]
+}
+
+// Unloading by module id would mean tracking three of them across restarts and
+// crashes; unloading by name removes exactly what was loaded and is safe to run
+// when nothing is loaded at all.
+function mixTeardownCommand() {
+  return ["sh", "-c",
+    "pactl unload-module module-loopback 2>/dev/null;"
+    + " pactl unload-module module-null-sink 2>/dev/null; true"]
+}
+
+function defaultSinkCommand() {
+  return ["sh", "-c", "pactl get-default-sink 2>/dev/null"]
+}
+
+function defaultSourceCommand() {
+  return ["sh", "-c", "pactl get-default-source 2>/dev/null"]
+}
+
 function cavaConfig(settings) {
   var bars = clamp(Math.round(Number(settings.barCount) || 14), 6, 24)
   var framerate = clamp(Math.round(Number(settings.framerate) || 30), 10, 60)
+
+  var source = inputSource(settings.input, settings.micSource)
 
   return [
     "[general]",
@@ -34,6 +91,12 @@ function cavaConfig(settings) {
     "bars = " + bars,
     // Let cava do its own gain. Doing it here is more code and a worse result.
     "autosens = 1",
+    "",
+    "[input]",
+    "method = pulse",
+    // `auto` is cava's own "whatever this machine is playing", which is right
+    // for the common case and needs no lookup.
+    "source = " + source,
     "",
     "[output]",
     // raw + ascii is one line per frame of N numbers: no binary, no
@@ -57,6 +120,51 @@ function cavaCheckCommand() {
 }
 
 var FRAME_MAX = 100
+
+// ------------------------------------------------------------ pixel grid
+//
+// The same trap the docker mosaic fell into. A pitch of width/count is
+// fractional, so bars land between device pixels and the renderer resolves some
+// at three pixels and others at four — a row of identical bars draws as a row of
+// visibly different ones, with every number in the layout correct.
+//
+// QT_SCALE_FACTOR makes it worse: at 0.85 a whole logical pixel is not a whole
+// real one either. Sizes are chosen on the device grid, and the PITCH is the
+// thing that has to be whole — that is what makes every bar share one sub-pixel
+// phase and rasterise the same way.
+
+function snapToDevice(px, dpr) {
+  var ratio = Number(dpr) || 1
+  if (ratio <= 0 || ratio === 1) return Math.max(1, Math.round(px))
+  return Math.max(1, Math.round(px * ratio)) / ratio
+}
+
+function floorToDevice(px, dpr) {
+  var ratio = Number(dpr) || 1
+  if (ratio <= 0 || ratio === 1) return Math.max(1, Math.floor(px))
+  return Math.max(1, Math.floor(px * ratio)) / ratio
+}
+
+// Bars of one width at one pitch, and the leftover split as padding rather than
+// smeared across the bars. Anything that cannot be divided evenly becomes empty
+// space at the edges, where nobody reads it as data.
+function barLayout(available, count, wantedWidth, gap, dpr) {
+  var bars = Math.max(1, Math.round(Number(count) || 1))
+  var space = Math.max(1, Number(available) || 0)
+  var minGap = Math.max(0, Number(gap) || 0)
+
+  var pitch = floorToDevice(space / bars, dpr)
+  var width = floorToDevice(Math.min(Number(wantedWidth) || pitch, pitch - minGap), dpr)
+  if (width < 1 / (Number(dpr) || 1)) width = pitch
+
+  var used = pitch * bars
+  return {
+    pitch: pitch,
+    width: width,
+    // Centred, so a mosaic that cannot fill the space is not glued to one side.
+    offset: floorToDevice(Math.max(0, (space - used) / 2), dpr)
+  }
+}
 
 function clamp(value, low, high) {
   return Math.max(low, Math.min(high, value))
@@ -176,13 +284,194 @@ function wavePoints(frame) {
   return points
 }
 
+// ------------------------------------------------------------- settings
+//
+// Two sources, and a rule for which wins.
+//
+// The bar host has no API for a widget to write its own shell.json entry, and a
+// plugin editing that file races the shell's own writes when someone drags the
+// bar around. So the settings the panel changes live in a file of the plugin's
+// own, the way the WLED and camera plugins do it, and shell.json seeds the
+// defaults.
+
+var DEFAULTS = {
+  base: "bottom",
+  cap: "flat",
+  fill: "solid",
+  palette: "accent",
+  input: "system",
+  barCount: 14,
+  segments: 8,
+  framerate: 30,
+  barWidth: 3,
+  widgetWidth: 90,
+  smoothing: 60,
+  floor: 3,
+  peakFall: 1.5,
+  showPeaks: false,
+  showWave: false,
+  spread: 1,
+  innerRadius: 0.3,
+  gradientFrom: "",
+  gradientTo: "",
+  solidColor: "",
+  peakThreshold: 85,
+  pauseOnBattery: true,
+  pauseWhenSilent: true,
+  wledEnabled: false,
+  wledRateHz: 10,
+  wledDevices: "",
+  wledRestore: true
+}
+
+// Later sources win, and an absent key never overrides a present one — a file
+// holding only `base` must not reset everything else to a default.
+function mergeSettings() {
+  var out = {}
+  for (var key in DEFAULTS) out[key] = DEFAULTS[key]
+
+  for (var i = 0; i < arguments.length; i++) {
+    var source = arguments[i]
+    if (!source) continue
+    for (var name in source) {
+      if (source[name] === undefined || source[name] === null) continue
+      if (source[name] === "" && DEFAULTS[name] !== "") continue
+      out[name] = source[name]
+    }
+  }
+
+  return out
+}
+
+function parseSettingsFile(text) {
+  if (!text) return null
+  try {
+    var parsed = JSON.parse(text)
+    return typeof parsed === "object" ? parsed : null
+  } catch (error) {
+    // A corrupt file falls back to the defaults rather than taking the widget
+    // down with it.
+    return null
+  }
+}
+
+function serializeSettings(settings) {
+  var out = {}
+  for (var key in DEFAULTS) {
+    if (settings[key] !== undefined) out[key] = settings[key]
+  }
+  return JSON.stringify(out, null, 2) + "\n"
+}
+
+// The next value on an axis, for a control that cycles rather than opens a
+// list: at this size a dropdown costs more than it gives.
+function cycle(values, current, direction) {
+  var index = values.indexOf(current)
+  var step = direction < 0 ? -1 : 1
+  if (index < 0) return values[0]
+  return values[(index + step + values.length) % values.length]
+}
+
+// ---------------------------------------------------------- style axes
+//
+// Four axes rather than a list of finished styles. Nine named presets would be
+// nine things to maintain and would still miss the tenth someone wants; these
+// combine, so "bars with round caps and a peak marker" and "a segmented ring"
+// are the same three settings arranged differently.
+
+var BASES = ["bottom", "top", "mirror", "radial"]   // where a bar grows from
+var CAPS = ["flat", "round", "segments"]            // what its end looks like
+var FILLS = ["solid", "barGradient", "screenGradient"]
+
+function isBase(name) { return BASES.indexOf(name) >= 0 }
+function isCap(name) { return CAPS.indexOf(name) >= 0 }
+function isFill(name) { return FILLS.indexOf(name) >= 0 }
+
+// Where one bar sits, in the drawing area, for the three linear bases. Radial
+// has its own geometry below.
+function barGeometry(base, value, height, minHeight) {
+  var full = Math.max(0, Number(height) || 0)
+  var floor = Math.max(1, Number(minHeight) || 1)
+  var length = Math.max(floor, (value / FRAME_MAX) * full)
+
+  if (base === "top") return { y: 0, height: length }
+  if (base === "mirror") {
+    var half = Math.max(floor / 2, length / 2)
+    return { y: full / 2 - half, height: half * 2 }
+  }
+  return { y: full - length, height: length }
+}
+
+// --------------------------------------------------------------- radial
+
+// A bar on a ring: an angle and two radii. Returned as geometry rather than as
+// pixels so the same numbers can be tested and the renderer can place it with a
+// rotation instead of trigonometry per frame.
+//
+// `spread` is how much of the circle to use — a full turn is a ring, half is
+// the fan from the reference sheet.
+function radialBar(index, count, value, options) {
+  var settings = options || {}
+  // `Number(undefined)` is NaN, never undefined — checking the setting itself
+  // is the difference between a ring and a frame of NaN.
+  var spread = settings.spread === undefined ? 1 : Number(settings.spread) || 1
+  var start = Number(settings.startAngle) || 0
+  var inner = Number(settings.innerRadius) || 0.25
+  var outer = Number(settings.outerRadius) || 1
+  var bars = Math.max(1, Number(count) || 1)
+
+  // The last bar must not land on top of the first when the spread is a full
+  // turn, so a closed ring divides by the count and an open fan by count - 1.
+  var closed = Math.abs(spread - 1) < 1e-9
+  var step = closed ? spread / bars : spread / Math.max(1, bars - 1)
+
+  var length = inner + (value / FRAME_MAX) * (outer - inner)
+
+  return {
+    angle: start + index * step,      // turns, not degrees: 0..1
+    inner: inner,
+    outer: Math.max(inner, length)
+  }
+}
+
+// ------------------------------------------------------------- peak hold
+//
+// The marker that rises instantly with a peak and sinks slowly afterwards. It
+// is what makes a meter readable at a glance: the bars say what is happening
+// now, the markers say what just happened.
+
+function updatePeaks(previous, frame, fallPerFrame) {
+  var fall = Math.max(0, Number(fallPerFrame) || 0)
+  var out = []
+
+  for (var i = 0; i < frame.length; i++) {
+    var was = previous && previous.length === frame.length ? previous[i] : 0
+    // A new high is taken immediately; otherwise the old one decays. Decaying
+    // towards the bar rather than to zero keeps the marker from sinking below
+    // the sound it is marking.
+    out.push(frame[i] >= was ? frame[i] : Math.max(frame[i], was - fall))
+  }
+
+  return out
+}
+
 // --------------------------------------------------------------- palettes
 //
 // Two families on purpose: `intensity` and `urgent` move with the sound,
 // `spectrum` and `gradient` are fixed to position. One gives colour motion and
 // the other keeps the bar visually still, and which you want is taste.
 
-var PALETTES = ["accent", "foreground", "intensity", "spectrum", "gradient", "urgent"]
+var PALETTES = [
+  "accent",      // the theme's accent, solid
+  "foreground",  // the theme's foreground, solid
+  "intensity",   // foreground -> accent with loudness
+  "spectrum",    // hue swept across the bands, saturation from the theme
+  "rainbow",     // the same sweep at full saturation, ignoring the theme
+  "heat",        // cold at rest, hot at the peaks
+  "gradient",    // between two colours you pick
+  "solid",       // one colour you pick
+  "urgent"       // accent, turning urgent above the threshold
+]
 
 function isPalette(name) {
   return PALETTES.indexOf(name) >= 0
@@ -194,6 +483,17 @@ function mix(a, b, t) {
     r: a.r + (b.r - a.r) * k,
     g: a.g + (b.g - a.g) * k,
     b: a.b + (b.b - a.b) * k
+  }
+}
+
+// The two ends of one bar, for the barGradient fill: the base is the colour at
+// rest and the tip is the colour at that bar's current height. A bar then
+// carries its own reading twice — length and colour — which is what makes the
+// reference sheets legible at thumbnail size.
+function barGradientPair(palette, index, count, value, ctx) {
+  return {
+    base: paletteColor(palette, index, count, 0, ctx),
+    tip: paletteColor(palette, index, count, value, ctx)
   }
 }
 
@@ -214,6 +514,23 @@ function paletteColor(palette, index, count, value, ctx) {
     // from the theme's accent so it still belongs to the theme.
     var hsv = rgbToHsv(ctx.accent)
     return hsvToRgb((hsv.h + position * 0.8) % 1, hsv.s, hsv.v)
+  }
+
+  if (palette === "rainbow") {
+    // Full saturation on purpose: `spectrum` borrows the theme's restraint,
+    // this one is the loud version, and having both is the point.
+    return hsvToRgb(position * 0.85, 0.85, 1)
+  }
+
+  if (palette === "heat") {
+    // Cold where it is quiet, hot where it peaks — the reading is the height
+    // and the colour says the same thing twice, which is what makes a meter
+    // legible out of the corner of an eye.
+    return hsvToRgb((0.62 - fraction * 0.62 + 1) % 1, 0.75, 0.55 + fraction * 0.45)
+  }
+
+  if (palette === "solid") {
+    return ctx.solidColor || ctx.accent
   }
 
   if (palette === "gradient") {

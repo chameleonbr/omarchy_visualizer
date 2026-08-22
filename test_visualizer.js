@@ -355,4 +355,191 @@ check("the restore puts the lamp back, and says so plainly when it cannot", () =
   assert.strictEqual(unknown.on, false, "nothing remembered: turn it off rather than guess")
 })
 
+
+// ------------------------------------------------------------ pixel grid
+
+check("bars are one width and one pitch, on the device grid", () => {
+  // The trap the docker mosaic fell into: a pitch of width/count is fractional,
+  // and identical bars then rasterise at different widths.
+  for (const dpr of [1, 0.85, 1.25, 1.5, 2]) {
+    const layout = barLayout(90, 14, 3, 2, dpr)
+    const whole = value => Math.abs(value * dpr - Math.round(value * dpr)) < 1e-6
+
+    assert.ok(whole(layout.pitch), "dpr " + dpr + " pitch")
+    assert.ok(whole(layout.width), "dpr " + dpr + " width")
+    assert.ok(whole(layout.offset), "dpr " + dpr + " offset")
+    assert.ok(layout.width <= layout.pitch, "a bar never overruns its pitch")
+  }
+})
+
+check("the leftover becomes padding, not a wider bar", () => {
+  // Smearing the remainder across the bars is how they end up different.
+  const layout = barLayout(100, 7, 20, 2, 1)
+  assert.ok(layout.pitch * 7 + layout.offset * 2 <= 100 + 1e-6)
+  assert.ok(layout.offset >= 0)
+})
+
+check("a bar never disappears, however tight the space", () => {
+  for (const width of [10, 20, 40]) {
+    const layout = barLayout(width, 24, 3, 2, 0.85)
+    assert.ok(layout.width >= 1 / 0.85 - 1e-9, "width " + width)
+  }
+})
+
+// ------------------------------------------------------------- style axes
+
+check("the axes are what the settings offer", () => {
+  assert.deepStrictEqual(BASES, ["bottom", "top", "mirror", "radial"])
+  assert.deepStrictEqual(CAPS, ["flat", "round", "segments"])
+  for (const base of BASES) assert.ok(isBase(base))
+  for (const cap of CAPS) assert.ok(isCap(cap))
+  assert.strictEqual(isBase("sideways"), false)
+})
+
+check("a bar grows from the edge its base names", () => {
+  const bottom = barGeometry("bottom", 50, 100, 1)
+  const top = barGeometry("top", 50, 100, 1)
+  const mirror = barGeometry("mirror", 50, 100, 1)
+
+  assert.strictEqual(bottom.y + bottom.height, 100, "bottom ends at the floor")
+  assert.strictEqual(top.y, 0, "top starts at the ceiling")
+  assert.strictEqual(mirror.y + mirror.height / 2, 50, "mirror is centred")
+})
+
+check("silence still draws something on every base", () => {
+  // A bar that vanishes at zero makes the widget look broken rather than quiet.
+  for (const base of ["bottom", "top", "mirror"]) {
+    const geometry = barGeometry(base, 0, 100, 2)
+    assert.ok(geometry.height >= 1, base)
+    assert.ok(geometry.y >= 0 && geometry.y + geometry.height <= 100 + 1e-9, base)
+  }
+})
+
+check("a full bar fills the height on every base", () => {
+  for (const base of ["bottom", "top", "mirror"]) {
+    assert.strictEqual(barGeometry(base, 100, 100, 1).height, 100, base)
+  }
+})
+
+// ---------------------------------------------------------------- radial
+
+check("a closed ring does not stack the last bar on the first", () => {
+  const angles = [0, 1, 2, 3].map(i => radialBar(i, 4, 100, {}).angle)
+  assert.deepStrictEqual(angles, [0, 0.25, 0.5, 0.75])
+  assert.ok(angles[3] < 1, "the fourth bar is not back at the start")
+})
+
+check("an open fan reaches its far edge", () => {
+  const angles = [0, 1, 2, 3].map(i => radialBar(i, 4, 100, { spread: 0.5 }).angle)
+  assert.strictEqual(angles[0], 0)
+  assert.ok(Math.abs(angles[3] - 0.5) < 1e-9, "the last bar lands on the edge")
+})
+
+check("radial length runs between the two radii", () => {
+  const quiet = radialBar(0, 8, 0, { innerRadius: 0.3, outerRadius: 1 })
+  const loud = radialBar(0, 8, 100, { innerRadius: 0.3, outerRadius: 1 })
+
+  assert.strictEqual(quiet.outer, 0.3, "silence is the inner circle")
+  assert.strictEqual(loud.outer, 1, "full reaches the rim")
+  assert.ok(loud.outer > quiet.outer)
+})
+
+check("radial survives one bar and a missing spread", () => {
+  assert.ok(isFinite(radialBar(0, 1, 50, {}).angle))
+  assert.ok(isFinite(radialBar(0, 1, 50, { spread: 0 }).angle))
+})
+
+// ------------------------------------------------------------- peak hold
+
+check("a peak is taken at once and sinks slowly", () => {
+  // The bars say what is happening now; the markers say what just happened.
+  assert.deepStrictEqual(updatePeaks([0, 0], [80, 40], 5), [80, 40], "a new high is immediate")
+  assert.deepStrictEqual(updatePeaks([80, 40], [10, 10], 5), [75, 35], "and then it decays")
+})
+
+check("a marker never sinks below the bar it marks", () => {
+  assert.deepStrictEqual(updatePeaks([50], [90], 100), [90])
+  assert.deepStrictEqual(updatePeaks([50], [30], 100), [30], "decay stops at the bar")
+})
+
+check("a changed bar count restarts the markers", () => {
+  assert.deepStrictEqual(updatePeaks([1, 2, 3], [9, 9], 5), [9, 9])
+  assert.deepStrictEqual(updatePeaks(null, [9], 5), [9])
+})
+
+// ------------------------------------------------------- the new palettes
+
+check("rainbow is loud and spectrum is polite", () => {
+  // One borrows the theme's restraint, the other ignores it; having both is
+  // the point of having two.
+  const muted = Object.assign({}, CTX, { accent: { r: 0.5, g: 0.5, b: 0.5 } })
+
+  const spectrum = paletteColor("spectrum", 3, 8, 50, muted)
+  const rainbow = paletteColor("rainbow", 3, 8, 50, muted)
+
+  const spread = c => Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b)
+  assert.ok(spread(spectrum) < 0.05, "a grey accent keeps spectrum grey")
+  assert.ok(spread(rainbow) > 0.4, "rainbow is saturated regardless")
+})
+
+check("heat runs cold at rest and hot at the peak", () => {
+  const cold = paletteColor("heat", 0, 8, 0, CTX)
+  const hot = paletteColor("heat", 0, 8, 100, CTX)
+
+  assert.ok(cold.b > cold.r, "quiet leans blue")
+  assert.ok(hot.r > hot.b, "loud leans red")
+})
+
+check("solid uses the colour given, or the accent when there is none", () => {
+  const picked = Object.assign({}, CTX, { solidColor: { r: 1, g: 0, b: 0 } })
+  sameColor(paletteColor("solid", 3, 8, 70, picked), { r: 1, g: 0, b: 0 }, "picked")
+  sameColor(paletteColor("solid", 3, 8, 70, CTX), CTX.accent, "fallback")
+})
+
+check("a bar gradient runs from its resting colour to its current one", () => {
+  const pair = barGradientPair("intensity", 0, 8, 100, CTX)
+  sameColor(pair.base, CTX.foreground, "base")
+  sameColor(pair.tip, CTX.accent, "tip")
+})
+
+// ------------------------------------------------------------ audio input
+
+check("the three inputs map to three sources", () => {
+  assert.deepStrictEqual(INPUTS, ["system", "mic", "both"])
+  assert.strictEqual(inputSource("system"), "auto", "cava's own default sink monitor")
+  assert.strictEqual(inputSource("mic", "alsa_input.usb"), "alsa_input.usb")
+  assert.ok(inputSource("both").indexOf(".monitor") > 0, "both reads the mix it builds")
+})
+
+check("the config carries the chosen input", () => {
+  const text = cavaConfig({ barCount: 14, framerate: 30, input: "mic", micSource: "mymic" })
+  assert.ok(text.indexOf("[input]") > 0)
+  assert.ok(text.indexOf("source = mymic") > 0)
+  assert.ok(text.indexOf("method = pulse") > 0)
+})
+
+check("hearing both builds a device and takes it away again", () => {
+  // Leaving a stray sink in someone's audio graph is a mess that outlives the
+  // widget.
+  const setup = mixSetupCommands("sink.monitor", "mic")
+  assert.strictEqual(setup.length, 3, "a null sink and two loopbacks")
+  assert.ok(setup[0].join(" ").indexOf("module-null-sink") > 0)
+  assert.ok(setup[1].join(" ").indexOf("source=sink.monitor") > 0)
+  assert.ok(setup[2].join(" ").indexOf("source=mic") > 0)
+
+  const teardown = mixTeardownCommand().join(" ")
+  assert.ok(teardown.indexOf("unload-module") > 0)
+  assert.ok(teardown.indexOf("module-loopback") > 0 && teardown.indexOf("module-null-sink") > 0)
+  assert.ok(teardown.indexOf("true") > 0, "safe to run when nothing is loaded")
+})
+
+check("nothing in the audio path needs root", () => {
+  const all = mixSetupCommands("a", "b").concat([mixTeardownCommand(),
+    defaultSinkCommand(), defaultSourceCommand()])
+  for (const command of all) {
+    const text = command.join(" ")
+    assert.ok(text.indexOf("sudo") < 0 && text.indexOf("pkexec") < 0, text)
+  }
+})
+
 console.log(passed + " checks passed")

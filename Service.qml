@@ -22,11 +22,56 @@ Item {
   property int floorLevel: 3
   property bool pauseOnBattery: true
   property bool pauseWhenSilent: true
+  property real peakFall: 1.5
+  property string input: "system"
+  property string micSource: ""
+  property string sinkMonitor: ""
 
   property bool wledEnabled: false
   property int wledRateHz: 10
   property string wledDevices: ""
   property bool wledRestore: true
+
+  // ------------------------------------------------------------ settings
+  //
+  // Two sources: the widget's entry in shell.json seeds the defaults, and the
+  // panel's own file wins over it. The bar host has no API for a widget to
+  // write its shell.json entry back, and a plugin editing that file races the
+  // shell whenever someone drags the bar around.
+
+  readonly property string settingsPath:
+    Quickshell.env("HOME") + "/.config/omarchy/visualizer.json"
+
+  property var seed: ({})
+  property var fileSettings: ({})
+  readonly property var merged: Vis.mergeSettings(seed, fileSettings)
+
+  function value(key) {
+    return merged[key]
+  }
+
+  FileView {
+    id: settingsFile
+    path: root.settingsPath
+    watchChanges: true
+    onFileChanged: reload()
+    onLoaded: root.fileSettings = Vis.parseSettingsFile(settingsFile.text()) || ({})
+  }
+
+  // Written whole, from the merge, so a file that only ever held one key does
+  // not quietly reset everything else on the next save.
+  function save(patch) {
+    var next = Vis.mergeSettings(merged, patch)
+    fileSettings = next
+    settingsFile.setText(Vis.serializeSettings(next))
+    applySettings()
+  }
+
+  onMergedChanged: applySettings()
+
+  function applySettings() {
+    configure(merged)
+  }
 
   function configure(settings) {
     var nextBars = Math.max(6, Math.min(24, Number(settings.barCount) || 14))
@@ -40,6 +85,15 @@ Item {
     floorLevel = Math.max(0, Math.min(20, Number(settings.floor) || 0))
     pauseOnBattery = settings.pauseOnBattery !== false
     pauseWhenSilent = settings.pauseWhenSilent !== false
+    peakFall = Math.max(0.2, Math.min(10, Number(settings.peakFall) || 1.5))
+
+    var wantedInput = String(settings.input || "system")
+    if (!Vis.isInput(wantedInput)) wantedInput = "system"
+    if (wantedInput !== input) {
+      input = wantedInput
+      restart = true
+      applyInput()
+    }
 
     wledEnabled = settings.wledEnabled === true
     wledRateHz = Math.max(1, Math.min(20, Number(settings.wledRateHz) || 10))
@@ -52,6 +106,7 @@ Item {
   // -------------------------------------------------------------- state
 
   property var frame: []
+  property var peaks: []
   property int frameNumber: 0
   // -1 until the check answers: "not installed" and "not asked yet" are
   // different, and only one of them is worth telling the user about.
@@ -116,7 +171,10 @@ Item {
 
   function writeConfig() {
     if (makeDir.running) return
-    configFile.setText(Vis.cavaConfig({ barCount: barCount, framerate: framerate }))
+    configFile.setText(Vis.cavaConfig({
+      barCount: barCount, framerate: framerate,
+      input: input, micSource: micSource
+    }))
     if (cava.running) restartCava()
   }
 
@@ -147,6 +205,9 @@ Item {
 
         var floored = Vis.applyFloor(next, root.floorLevel)
         root.frame = Vis.smoothFrame(root.frame, floored, root.smoothing)
+        // Peaks track the smoothed frame, not the raw one: a marker that
+        // chased every spike would never sit still long enough to read.
+        root.peaks = Vis.updatePeaks(root.peaks, root.frame, root.peakFall)
         root.pushToWled()
       }
     }
@@ -161,10 +222,87 @@ Item {
     } else {
       cava.running = false
       frame = []
+      peaks = []
       restoreWled()
     }
   }
 
+
+  // ------------------------------------------------------- audio input
+  //
+  // "system" is cava's own default and needs no lookup. "mic" needs the name of
+  // the default source. "both" needs a device that does not exist yet, so the
+  // plugin builds one and takes it away again — leaving a stray sink in
+  // someone's audio graph is a mess that outlives the widget.
+
+  Process {
+    id: sinkQuery
+    command: Vis.defaultSinkCommand()
+    stdout: SplitParser {
+      onRead: function(line) { root.sinkMonitor = line.trim() + ".monitor" }
+    }
+  }
+
+  Process {
+    id: sourceQuery
+    command: Vis.defaultSourceCommand()
+    stdout: SplitParser {
+      onRead: function(line) { root.micSource = line.trim() }
+    }
+  }
+
+  Process { id: mixProcess }
+  property var mixQueue: []
+  property bool mixBuilt: false
+
+  function applyInput() {
+    if (input === "system") { teardownMix(); return }
+
+    sourceQuery.running = true
+    if (input === "both") {
+      sinkQuery.running = true
+      buildTimer.restart()
+    }
+  }
+
+  // Given a moment for the two queries to answer. Building the mix against an
+  // empty device name would load a loopback from nothing.
+  Timer {
+    id: buildTimer
+    interval: 400
+    onTriggered: root.buildMix()
+  }
+
+  function buildMix() {
+    if (mixBuilt || !sinkMonitor || !micSource) return
+    mixBuilt = true
+    mixQueue = Vis.mixSetupCommands(sinkMonitor, micSource)
+    pumpMix()
+  }
+
+  function pumpMix() {
+    if (mixProcess.running || mixQueue.length === 0) return
+    var next = mixQueue.shift()
+    mixProcess.command = next
+    mixProcess.running = true
+  }
+
+  Connections {
+    target: mixProcess
+    function onExited() { root.pumpMix() }
+  }
+
+  function teardownMix() {
+    if (!mixBuilt) return
+    mixBuilt = false
+    mixQueue = []
+    Quickshell.execDetached(Vis.mixTeardownCommand())
+  }
+
+  // The mix is torn down when the widget stops for any reason, not only when
+  // the setting changes: a shell restart with it still loaded would leave the
+  // sink behind for good.
+  Component.onDestruction: teardownMix()
 
   // ------------------------------------------------------------- WLED
   //
