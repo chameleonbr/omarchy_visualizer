@@ -265,3 +265,12 @@ Two files, both yours:
 
 It never touches `~/.config/cava`. That file belongs to whoever runs cava in a
 terminal, and a bar widget has no business rewriting it.
+
+It reads one more, `~/.config/omarchy/wled.json`, which the WLED plugin owns.
+
+Both of the files it reads go through `SizedFile`, which stats before it
+reads: a file that is not a regular file, or is larger than 64 KiB, is never
+opened and the last good settings stand. The shell outlives every window in
+it, so anything it reads it keeps — and the device list in `wled.json` is
+scanned to a fixed depth for the same reason. Trim the file and it loads
+again on the spot; no restart.

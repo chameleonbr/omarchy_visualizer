@@ -69,12 +69,12 @@ Item {
     return merged[key]
   }
 
-  FileView {
+  SizedFile {
     id: settingsFile
     path: root.settingsPath
-    watchChanges: true
-    onFileChanged: reload()
-    onLoaded: root.fileSettings = Vis.parseSettingsFile(settingsFile.text()) || ({})
+    onFileLoaded: function(text) {
+      root.fileSettings = Vis.parseSettingsFile(text) || ({})
+    }
   }
 
   // Written whole, from the merge, so a file that only ever held one key does
@@ -188,6 +188,8 @@ Item {
   FileView {
     id: configFile
     path: root.configFilePath
+    // Written, never read: nothing here ever calls text().
+    preload: false
   }
 
   // FileView cannot create the directory, and the first write happens before
@@ -362,43 +364,17 @@ Item {
     Quickshell.env("HOME") + "/.config/omarchy/wled.json"
 
   // Read, never written: the WLED plugin owns this file.
-  FileView {
+  SizedFile {
     id: wledConfig
     path: root.wledConfigPath
-    watchChanges: true
-    onFileChanged: reload()
+    onFileLoaded: function(text) { root.wledParsed = Vis.parseConfigFile(text) }
   }
+
+  property var wledParsed: null
 
   readonly property var wledHosts: {
     if (!wledEnabled) return []
-
-    var wanted = []
-    var parts = wledDevices.split(",")
-    for (var p = 0; p < parts.length; p++) {
-      var name = parts[p].trim()
-      if (name) wanted.push(name)
-    }
-
-    var text = wledConfig.text()
-    if (!text) return []
-
-    var parsed
-    try {
-      parsed = JSON.parse(text)
-    } catch (error) {
-      return []
-    }
-
-    var hosts = []
-    var devices = parsed.devices || []
-    for (var i = 0; i < devices.length; i++) {
-      var host = devices[i].address || devices[i].host
-      if (!host) continue
-      if (wanted.length > 0 && wanted.indexOf(devices[i].host) < 0
-        && wanted.indexOf(devices[i].name) < 0) continue
-      hosts.push(host)
-    }
-    return hosts
+    return Vis.wledHostList(wledParsed, Vis.wledWantedNames(wledDevices))
   }
 
   property real lastSentMs: 0

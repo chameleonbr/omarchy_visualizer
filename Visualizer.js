@@ -63,6 +63,71 @@ function configDirCommand(dir) {
     "omarchy-visualizer", dir]
 }
 
+// ------------------------------------------------------- file ceilings
+//
+// The shell outlives every window in it, so anything it reads it keeps. A
+// settings file is a few hundred bytes and a WLED config a few thousand;
+// past this ceiling the file is either corrupt or someone growing a
+// long-lived heap, and neither is worth reading. The probe runs before the
+// read rather than after, because after is where the allocation already is.
+
+var MAX_CONFIG_BYTES = 65536
+
+// Enough for more lights than a room holds. The list is scanned to this
+// depth, so a device past it is not merely unselected but unseen — which is
+// the point of a ceiling.
+var MAX_WLED_DEVICES = 32
+
+// Exits 0 only for a regular file, of a size we are willing to hold. `-f`
+// and `stat -L` both follow the link, so a symlink to something enormous is
+// measured by what it points at rather than by the link.
+function sizeProbeCommand(path, maxBytes) {
+  return ["sh", "-c",
+    'f="$1"; c="$2"; ' +
+    '[ -f "$f" ] || exit 1; ' +
+    's=$(stat -Lc %s -- "$f") || exit 1; ' +
+    '[ "$s" -le "$c" ] || exit 1',
+    "omarchy-visualizer", path, String(maxBytes)]
+}
+
+function parseConfigFile(text) {
+  if (!text) return null
+  if (text.length > MAX_CONFIG_BYTES) return null
+  try {
+    var parsed = JSON.parse(text)
+    return parsed && typeof parsed === "object" ? parsed : null
+  } catch (error) {
+    return null
+  }
+}
+
+// The names the user typed, capped the same way the device list is: a
+// setting string is not a place to store a million commas.
+function wledWantedNames(spec) {
+  var wanted = []
+  var parts = String(spec || "").split(",")
+  for (var p = 0; p < parts.length && wanted.length < MAX_WLED_DEVICES; p++) {
+    var name = parts[p].trim()
+    if (name) wanted.push(name)
+  }
+  return wanted
+}
+
+function wledHostList(parsed, wanted) {
+  var hosts = []
+  var devices = (parsed && parsed.devices) || []
+  var limit = Math.min(devices.length, MAX_WLED_DEVICES)
+  for (var i = 0; i < limit; i++) {
+    var device = devices[i] || {}
+    var host = device.address || device.host
+    if (!host) continue
+    if (wanted.length > 0 && wanted.indexOf(device.host) < 0
+      && wanted.indexOf(device.name) < 0) continue
+    hosts.push(host)
+  }
+  return hosts
+}
+
 // --------------------------------------------------------- audio input
 //
 // cava reads one device. "What the machine is playing" is the monitor of the
@@ -391,16 +456,10 @@ function mergeSettings() {
   return out
 }
 
+// A corrupt or oversized file falls back to the defaults rather than taking
+// the widget down with it, or holding what it was fed.
 function parseSettingsFile(text) {
-  if (!text) return null
-  try {
-    var parsed = JSON.parse(text)
-    return typeof parsed === "object" ? parsed : null
-  } catch (error) {
-    // A corrupt file falls back to the defaults rather than taking the widget
-    // down with it.
-    return null
-  }
+  return parseConfigFile(text)
 }
 
 function serializeSettings(settings) {

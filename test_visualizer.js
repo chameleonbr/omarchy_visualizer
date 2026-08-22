@@ -848,4 +848,66 @@ check("the window mode is gone: the compositor owns that", () => {
   assert.strictEqual(DEFAULTS.language, "auto")
 })
 
+// ------------------------------------------------------- file ceilings
+
+check("a file past the ceiling is refused rather than held", () => {
+  const fat = JSON.stringify({ barCount: 16, junk: "x".repeat(MAX_CONFIG_BYTES) })
+  assert.ok(fat.length > MAX_CONFIG_BYTES)
+  assert.strictEqual(parseSettingsFile(fat), null, "nothing of it is kept")
+  assert.strictEqual(parseConfigFile(fat), null)
+  assert.deepStrictEqual(parseSettingsFile('{"barCount":16}'), { barCount: 16 },
+    "an ordinary file still loads")
+})
+
+check("the probe refuses everything that is not a small regular file", () => {
+  const command = sizeProbeCommand("/home/someone/.config/omarchy/visualizer.json",
+    MAX_CONFIG_BYTES)
+  const script = command[2]
+  assert.strictEqual(command[0], "sh")
+  assert.ok(script.indexOf('[ -f "$f" ] || exit 1') >= 0, "regular files only")
+  assert.ok(script.indexOf("stat -Lc %s") >= 0, "a symlink is measured by its target")
+  assert.ok(script.indexOf('[ "$s" -le "$c" ] || exit 1') >= 0, "and by the ceiling")
+  assert.strictEqual(command[command.length - 1], String(MAX_CONFIG_BYTES))
+})
+
+check("the path the probe reads is data, never script", () => {
+  const nasty = "/home/someone/$(touch /tmp/pwned)/`id`.json"
+  const command = sizeProbeCommand(nasty, MAX_CONFIG_BYTES)
+  assert.strictEqual(command.indexOf(nasty), command.length - 2,
+    "passed as an argument")
+  assert.strictEqual(command[2].indexOf(nasty), -1, "and never spliced in")
+})
+
+check("the device list is read to a fixed depth", () => {
+  const devices = []
+  for (let i = 0; i < 5000; i++) devices.push({ host: "wled-" + i, address: "10.0.0." + i })
+  const hosts = wledHostList({ devices: devices }, [])
+  assert.strictEqual(hosts.length, MAX_WLED_DEVICES)
+  assert.strictEqual(hosts[0], "10.0.0.0")
+  assert.deepStrictEqual(wledHostList(null, []), [], "a file that never loaded is empty")
+  assert.deepStrictEqual(wledHostList({}, []), [])
+})
+
+check("the names asked for are capped the same way", () => {
+  const spec = new Array(5000).fill("lamp").join(",")
+  assert.strictEqual(wledWantedNames(spec).length, MAX_WLED_DEVICES)
+  assert.deepStrictEqual(wledWantedNames(" desk , shelf ,, "), ["desk", "shelf"])
+  assert.deepStrictEqual(wledWantedNames(""), [])
+  assert.deepStrictEqual(wledWantedNames(undefined), [])
+})
+
+check("naming a device still picks it out of the file", () => {
+  const parsed = { devices: [
+    { name: "desk", host: "wled-desk", address: "10.0.0.2" },
+    { name: "shelf", host: "wled-shelf", address: "10.0.0.3" },
+    { name: "broken" }
+  ] }
+  assert.deepStrictEqual(wledHostList(parsed, []), ["10.0.0.2", "10.0.0.3"],
+    "no filter means every device that has an address")
+  assert.deepStrictEqual(wledHostList(parsed, ["shelf"]), ["10.0.0.3"])
+  assert.deepStrictEqual(wledHostList(parsed, ["wled-desk"]), ["10.0.0.2"],
+    "by host as well as by name")
+  assert.deepStrictEqual(wledHostList(parsed, ["nobody"]), [])
+})
+
 console.log(passed + " checks passed")

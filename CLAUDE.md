@@ -50,6 +50,15 @@ Visualizer.js    all the logic, and the only part with tests
 
 ## Things that will bite you
 
+- **`FileView` reads on demand, and that is the only gate there is.** There is
+  no size ceiling on the type, so `SizedFile` keeps `preload` off until a
+  `stat` probe has passed and only then opens it — the flag *is* the gate. Two
+  consequences: `reload()` on a `FileView` whose `preload` is false invalidates
+  without reading, so `onLoaded` never fires and the settings silently stay at
+  their defaults; and `watchChanges` needs the `path` set to notice anything,
+  so a refused file must keep its path rather than have it cleared, or trimming
+  the file back would never be seen.
+
 - **`.pragma library` is not optional.** Without it each importing QML file gets
   its own copy of the module, and a setting applied in the service is invisible
   to the panel.
