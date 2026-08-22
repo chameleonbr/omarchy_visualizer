@@ -1,12 +1,12 @@
-// The settings, over the stage.
+// The settings, beside the spectrum rather than over it.
 //
-// Every row cycles rather than opening a list: at this size a dropdown costs
-// more than it gives, and the whole point is to try things quickly and see the
-// result behind the panel while you do it.
+// Every row cycles on click — left forward, right back — because at this width
+// a dropdown costs more than it gives, and there is no apply button: the
+// visualiser next to the panel is the preview for every control in here.
 //
-// Changes are written to the plugin's own file and take effect immediately —
-// there is no apply button, because the visualiser behind the panel is the
-// preview.
+// The colour rows only appear for the palettes that read a colour. Offering a
+// picker that changes nothing is how a settings screen teaches people that its
+// controls are decoration.
 
 import QtQuick
 import qs.Commons
@@ -18,47 +18,47 @@ Item {
 
   property var widget: null
   readonly property var service: widget ? widget.service : null
+  readonly property string palette: service ? service.value("palette") : "accent"
+  readonly property var colorKeys: Vis.colorKeysFor(palette)
+
+  property string editing: ""
 
   signal closeRequested()
 
-  MouseArea {
-    anchors.fill: parent
-    onClicked: root.closeRequested()
+  function set(key, value) {
+    if (!service) return
+    var patch = {}
+    patch[key] = value
+    service.save(patch)
   }
 
   Rectangle {
-    anchors.centerIn: parent
-    width: Math.min(parent.width - Style.space(40), Style.space(560))
-    height: Math.min(parent.height - Style.space(40), column.implicitHeight + Style.space(40))
-    color: Color.background
-    radius: Style.cornerRadius
-    border.width: 1
-    border.color: Color.popups.border
+    anchors.fill: parent
+    color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.04)
+    radius: Style.space(6)
+  }
 
-    MouseArea { anchors.fill: parent }
+  Flickable {
+    id: flick
+    anchors.fill: parent
+    anchors.margins: Style.space(10)
+    contentWidth: width
+    contentHeight: column.implicitHeight
+    clip: true
+    boundsBehavior: Flickable.StopAtBounds
 
     Column {
       id: column
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.margins: Style.space(20)
-      spacing: Style.space(6)
+      width: flick.width
+      spacing: Style.space(2)
 
       Text {
         text: "Ajustes"
         color: Color.foreground
         font.family: Style.font.family
-        font.pixelSize: Style.font.subtitle
+        font.pixelSize: Style.font.body
         font.bold: true
-      }
-
-      Text {
-        text: "clique num valor para trocar · esc volta"
-        color: Qt.darker(Color.foreground, 1.8)
-        font.family: Style.font.family
-        font.pixelSize: Style.font.caption
-        bottomPadding: Style.space(8)
+        bottomPadding: Style.space(4)
       }
 
       Repeater {
@@ -68,11 +68,11 @@ Item {
           { key: "fill", label: "preenchimento", values: Vis.FILLS },
           { key: "palette", label: "paleta", values: Vis.PALETTES },
           { key: "input", label: "entrada", values: Vis.INPUTS },
-          { key: "showPeaks", label: "marcador de pico", values: [false, true] },
-          { key: "showWave", label: "onda por baixo", values: [false, true] },
+          { key: "showPeaks", label: "pico", values: [false, true] },
+          { key: "showWave", label: "onda", values: [false, true] },
           { key: "barCount", label: "barras", values: [8, 12, 14, 16, 20, 24] },
           { key: "smoothing", label: "queda", values: [0, 30, 60, 80, 95] },
-          { key: "framerate", label: "quadros por segundo", values: [15, 30, 45, 60] }
+          { key: "framerate", label: "fps", values: [15, 30, 45, 60] }
         ]
 
         Rectangle {
@@ -82,41 +82,36 @@ Item {
             ? root.service.value(modelData.key) : modelData.values[0]
 
           width: column.width
-          height: row.implicitHeight + Style.space(10)
-          radius: Style.space(4)
+          height: cycleRow.implicitHeight + Style.space(8)
+          radius: Style.space(3)
           color: hover.hovered
-            ? Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.06)
+            ? Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.07)
             : "transparent"
 
           HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
 
-          // Left cycles forward, right cycles back: the same control both ways
-          // beats two arrows per row.
           TapHandler {
             acceptedButtons: Qt.LeftButton | Qt.RightButton
             onTapped: function(point, button) {
-              if (!root.service) return
-              var patch = {}
-              patch[modelData.key] = Vis.cycle(modelData.values, current,
-                button === Qt.RightButton ? -1 : 1)
-              root.service.save(patch)
+              root.set(modelData.key,
+                Vis.cycle(modelData.values, current, button === Qt.RightButton ? -1 : 1))
             }
           }
 
           Row {
-            id: row
+            id: cycleRow
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            anchors.leftMargin: Style.space(8)
-            anchors.rightMargin: Style.space(8)
+            anchors.leftMargin: Style.space(6)
+            anchors.rightMargin: Style.space(6)
 
             Text {
               text: modelData.label
               color: Qt.darker(Color.foreground, 1.4)
               font.family: Style.font.family
-              font.pixelSize: Style.font.body
-              width: parent.width - Style.space(180)
+              font.pixelSize: Style.font.caption
+              width: parent.width - Style.space(110)
               elide: Text.ElideRight
             }
 
@@ -124,23 +119,108 @@ Item {
               text: String(parent.parent.current)
               color: Color.accent
               font.family: Style.font.family
-              font.pixelSize: Style.font.body
-              font.bold: true
+              font.pixelSize: Style.font.caption
               horizontalAlignment: Text.AlignRight
-              width: Style.space(172)
+              width: Style.space(104)
+              elide: Text.ElideLeft
             }
           }
         }
       }
 
+      // ------------------------------------------------------- colours
+
+      Repeater {
+        // Only what the current palette actually reads. A picker that changes
+        // nothing teaches people the controls are decoration.
+        model: root.colorKeys
+
+        Column {
+          required property string modelData
+
+          readonly property string label:
+            modelData === "solidColor" ? "cor"
+            : (modelData === "gradientFrom" ? "gradiente de" : "gradiente até")
+          readonly property string value:
+            root.service ? String(root.service.value(modelData) || "") : ""
+          readonly property bool open: root.editing === modelData
+
+          width: column.width
+          spacing: Style.space(4)
+
+          Rectangle {
+            width: parent.width
+            height: swatchRow.implicitHeight + Style.space(8)
+            radius: Style.space(3)
+            color: parent.open || swatchHover.hovered
+              ? Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.07)
+              : "transparent"
+
+            HoverHandler { id: swatchHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler {
+              onTapped: root.editing = parent.parent.open ? "" : parent.parent.modelData
+            }
+
+            Row {
+              id: swatchRow
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.leftMargin: Style.space(6)
+              anchors.rightMargin: Style.space(6)
+              spacing: Style.space(6)
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: parent.parent.parent.label
+                color: Qt.darker(Color.foreground, 1.4)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                width: parent.width - Style.space(90)
+                elide: Text.ElideRight
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                // An empty setting says so rather than showing a swatch of the
+                // colour it would fall back to, which would read as a choice
+                // someone made.
+                text: parent.parent.parent.value || "tema"
+                color: Qt.darker(Color.foreground, 1.6)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: Style.space(18)
+                height: Style.space(18)
+                radius: Style.space(3)
+                color: {
+                  var parsed = Vis.parseHex(parent.parent.parent.value)
+                  return parsed ? Qt.rgba(parsed.r, parsed.g, parsed.b, 1) : Color.accent
+                }
+                border.width: 1
+                border.color: Color.popups.border
+              }
+            }
+          }
+
+          ColorPicker {
+            width: parent.width
+            visible: parent.open
+            value: parent.value
+            fallback: Color.accent
+            onPicked: function(hex) { root.set(parent.modelData, hex) }
+          }
+        }
+      }
+
       Text {
-        topPadding: Style.space(10)
+        topPadding: Style.space(8)
         width: column.width
         wrapMode: Text.WordWrap
-        // Said plainly, because "both" briefly rearranges the audio graph and
-        // that is not something to discover afterwards.
-        text: "entrada: sistema ouve o que a máquina toca · microfone ouve o microfone · "
-          + "ambos cria um dispositivo virtual enquanto estiver ligado e o remove ao sair"
+        text: "clique num valor para trocar · botão direito volta"
         color: Qt.darker(Color.foreground, 1.9)
         font.family: Style.font.family
         font.pixelSize: Style.font.caption

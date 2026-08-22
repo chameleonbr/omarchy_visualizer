@@ -80,8 +80,22 @@ Click the widget and the spectrum gets a window of its own.
 | `s` | settings, over the top |
 | `esc` | steps back one layer — out of the settings, then out of fullscreen, then closed |
 
-Every settings row cycles on click, left forward and right back. There is no
-apply button: the visualiser behind the panel is the preview.
+The settings open **beside** the spectrum, not over it — every control in them
+is previewed by the visualiser next to it, so covering it would defeat the
+point. On a narrow screen they go underneath instead.
+
+Every row cycles on click, left forward and right back. There is no apply
+button.
+
+Windowed, the stage is a floating card the size of its own content: the rest of
+the screen carries on working, and you can click other windows while it is up.
+It takes the keyboard only for a moment when it opens, so `f` and `s` work right
+away; after clicking elsewhere, click the card again to use them.
+
+**Colours**: the palettes that read a colour — `solid` and `gradient` — get a
+picker in the settings, with a saturation square, a hue strip and an editable
+hex. The hex commits on Enter rather than on every keystroke, because `#ff` is
+a valid prefix of a colour someone is still typing.
 
 It can be bound too:
 

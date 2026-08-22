@@ -99,6 +99,18 @@ Visualizer.js    all the logic, and the only part with tests
   whichever monitor Quickshell picks first, and the click looks like it did
   nothing.
 
+- **Exclusive focus locks the desktop.** Held for the life of the window, the
+  compositor routes every key to it and nothing else on screen can be used.
+  The stage primes Exclusive for a moment on open — so `f` and `s` work
+  immediately — then settles on OnDemand, which is the dance qs.Ui's
+  KeyboardPanel does. The trade is that after clicking another window the keys
+  need a click back on the stage; that is the correct half to give up.
+
+- **Windowed, the stage is the size of its own content.** A layer surface
+  covering the screen swallows every click even when it is fully transparent,
+  so the earlier full-screen scrim made the desktop unusable while the
+  visualiser was open. Only fullscreen anchors to all four edges.
+
 - **A popup cannot take keyboard focus.** The stage is a `PanelWindow` with
   `WlrKeyboardFocus.Exclusive`; that is what makes `f` and `s` work at all.
 

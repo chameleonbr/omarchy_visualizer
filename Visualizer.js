@@ -604,6 +604,33 @@ function parseHex(text) {
   }
 }
 
+// The other direction from parseHex, for the picker: what the user chose has
+// to go back into the settings file as text.
+function toHex(color) {
+  function channel(v) {
+    var byte = Math.round(clamp(Number(v) || 0, 0, 1) * 255)
+    var text = byte.toString(16)
+    return text.length === 1 ? "0" + text : text
+  }
+  return "#" + channel(color.r) + channel(color.g) + channel(color.b)
+}
+
+// Which settings hold a colour, so the picker and the palettes agree on the
+// list rather than each carrying their own copy of it.
+var COLOR_KEYS = ["solidColor", "gradientFrom", "gradientTo"]
+
+function isColorKey(key) {
+  return COLOR_KEYS.indexOf(key) >= 0
+}
+
+// Which colour a palette actually reads, so the picker can offer the ones that
+// will change something and say so about the ones that will not.
+function colorKeysFor(palette) {
+  if (palette === "solid") return ["solidColor"]
+  if (palette === "gradient") return ["gradientFrom", "gradientTo"]
+  return []
+}
+
 // ------------------------------------------------------------ WLED bridge
 //
 // The differentiator, and the part with a real device on the other end.
