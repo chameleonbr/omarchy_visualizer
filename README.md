@@ -41,6 +41,16 @@ fifteen separate things to maintain.
 | **base** | `bottom` · `top` · `mirror` · `radial` |
 | **cap** | `flat` · `round` · `segments` |
 | **fill** | `solid` · `barGradient` · `screenGradient` |
+
+`solid` is one flat colour per bar. `barGradient` ramps every bar through the
+whole palette range, normalised to its own length. `screenGradient` anchors
+one ramp to the drawing area instead, so a quiet bar only ever reaches the low
+end of it and a loud one covers the lot.
+
+A palette that reads position rather than height — `rainbow`, `spectrum`, a
+picked `solid` — has the same colour at both ends of a bar, so brightness
+stands in for the height it has no opinion about. Every fill does something
+visible in every palette.
 | **extras** | peak markers · a wave underneath |
 
 `radial` is a base like any other, so a full ring and an open fan are the same

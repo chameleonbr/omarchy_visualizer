@@ -654,6 +654,61 @@ check("the hint says what the letters on screen cannot", () => {
   assert.ok(hintText(true).indexOf("shift") >= 0)
 })
 
+// ------------------------------------------------------------------- fills
+
+const FILL_CTX = {
+  foreground: { r: 1, g: 1, b: 1 },
+  accent: { r: 0, g: 0.4, b: 1 },
+  urgent: { r: 1, g: 0, b: 0 },
+  gradientFrom: null, gradientTo: null, solidColor: null,
+  peakThreshold: 85
+}
+
+check("no palette draws a gradient between a colour and itself", () => {
+  for (const palette of PALETTES) {
+    for (const fill of ["barGradient", "screenGradient"]) {
+      for (const value of [10, 50, 95]) {
+        const pair = barGradientPair(palette, 3, 14, value, FILL_CTX, fill)
+        assert.ok(!sameColor(pair.base, pair.tip),
+          palette + "/" + fill + " at " + value + " is a flat bar")
+      }
+    }
+  }
+})
+
+check("barGradient normalises to the bar, screenGradient to the drawing area", () => {
+  for (const palette of PALETTES) {
+    const quiet = barGradientPair(palette, 3, 14, 10, FILL_CTX, "barGradient")
+    const loud = barGradientPair(palette, 3, 14, 95, FILL_CTX, "barGradient")
+    assert.ok(sameColor(quiet.tip, loud.tip),
+      palette + ": a barGradient tip must not depend on the value")
+
+    const low = barGradientPair(palette, 3, 14, 10, FILL_CTX, "screenGradient")
+    const high = barGradientPair(palette, 3, 14, 95, FILL_CTX, "screenGradient")
+    assert.ok(!sameColor(low.tip, high.tip),
+      palette + ": a screenGradient tip must follow the value")
+  }
+})
+
+check("the fill is read, so all three do something different", () => {
+  // The bug this replaced: `fill` had three values and two behaviours, because
+  // the pair was built without ever being told which fill asked for it.
+  for (const palette of PALETTES) {
+    const bar = barGradientPair(palette, 3, 14, 40, FILL_CTX, "barGradient")
+    const screen = barGradientPair(palette, 3, 14, 40, FILL_CTX, "screenGradient")
+    assert.ok(!sameColor(bar.tip, screen.tip),
+      palette + ": barGradient and screenGradient are the same picture")
+  }
+})
+
+check("a dimmed foot is darker than the tip, never brighter", () => {
+  const pair = barGradientPair("rainbow", 3, 14, 90, FILL_CTX, "barGradient")
+  const sum = (c) => c.r + c.g + c.b
+  assert.ok(sum(pair.base) < sum(pair.tip))
+  assert.deepStrictEqual(dim({ r: 1, g: 1, b: 1 }, 0), { r: 0, g: 0, b: 0 })
+  assert.deepStrictEqual(dim({ r: 1, g: 0.5, b: 0 }, 1), { r: 1, g: 0.5, b: 0 })
+})
+
 // ------------------------------------------------------------ accelerators
 
 check("every row has its own letter and nothing else claims it", () => {

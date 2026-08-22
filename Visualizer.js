@@ -386,7 +386,12 @@ function cycle(values, current, direction) {
 
 var BASES = ["bottom", "top", "mirror", "radial"]   // where a bar grows from
 var CAPS = ["flat", "round", "segments"]            // what its end looks like
-var FILLS = ["solid", "barGradient", "screenGradient"]
+var FILLS = [
+  "solid",           // one flat colour per bar, from the palette
+  "barGradient",     // every bar ramps through the whole palette range
+  "screenGradient"   // one ramp anchored to the drawing area: a short bar only
+                     // reaches the low end of it
+]
 
 function isBase(name) { return BASES.indexOf(name) >= 0 }
 function isCap(name) { return CAPS.indexOf(name) >= 0 }
@@ -504,15 +509,53 @@ function mix(a, b, t) {
   }
 }
 
-// The two ends of one bar, for the barGradient fill: the base is the colour at
-// rest and the tip is the colour at that bar's current height. A bar then
-// carries its own reading twice — length and colour — which is what makes the
-// reference sheets legible at thumbnail size.
-function barGradientPair(palette, index, count, value, ctx) {
-  return {
-    base: paletteColor(palette, index, count, 0, ctx),
-    tip: paletteColor(palette, index, count, value, ctx)
+// The two ends of one bar. The fill decides what the tip means:
+//
+//   barGradient    — the tip is the top of the palette, whatever this bar is
+//                    doing. Every bar shows the whole range, normalised to its
+//                    own length.
+//   screenGradient — the tip is the colour at this bar's actual height, so the
+//                    ramp is anchored to the drawing area and a quiet bar only
+//                    ever reaches the low end of it.
+//
+// Those two were the same function once, which is why `fill` looked like it
+// had three values and two behaviours.
+function barGradientPair(palette, index, count, value, ctx, fill) {
+  var reach = fill === "screenGradient" ? value : FRAME_MAX
+  var base = paletteColor(palette, index, count, 0, ctx)
+  var tip = paletteColor(palette, index, count, reach, ctx)
+
+  // A palette that reads position rather than height — `rainbow`, `spectrum`,
+  // a picked `solid` — hands back the same colour at both ends, and a gradient
+  // between a colour and itself is a flat bar. Brightness stands in for the
+  // height the palette has no opinion about, so the fill still does something
+  // visible: otherwise the setting reads as broken in exactly the palettes
+  // people pick first.
+  if (sameColor(base, tip)) {
+    base = dim(tip, FLAT_BASE_DIM)
+    // Anchored, again: a quiet bar never reaches full brightness, where under
+    // `barGradient` every bar tops out at the palette's own colour.
+    if (fill === "screenGradient") {
+      tip = dim(tip, FLAT_BASE_DIM
+        + (1 - FLAT_BASE_DIM) * clamp(value / FRAME_MAX, 0, 1))
+    }
   }
+
+  return { base: base, tip: tip }
+}
+
+// How dark the foot of a bar goes when the palette itself has no opinion.
+var FLAT_BASE_DIM = 0.32
+
+function sameColor(a, b) {
+  return Math.abs(a.r - b.r) < 0.002
+    && Math.abs(a.g - b.g) < 0.002
+    && Math.abs(a.b - b.b) < 0.002
+}
+
+function dim(color, amount) {
+  var k = clamp(amount, 0, 1)
+  return { r: color.r * k, g: color.g * k, b: color.b * k }
 }
 
 function paletteColor(palette, index, count, value, ctx) {

@@ -53,7 +53,8 @@ Item {
   }
 
   function gradientPair(index, value) {
-    var pair = Vis.barGradientPair(root.palette, index, root.count, value, root.paletteContext)
+    var pair = Vis.barGradientPair(root.palette, index, root.count, value,
+      root.paletteContext, root.fill)
     return {
       base: Qt.rgba(pair.base.r, pair.base.g, pair.base.b, 1),
       tip: Qt.rgba(pair.tip.r, pair.tip.g, pair.tip.b, 1)
@@ -79,7 +80,10 @@ Item {
 
       readonly property var geometry: Vis.barGeometry(
         root.base, modelData, root.height, root.minBar, root.devicePixelRatio)
-      readonly property var pair: root.gradientPair(index, modelData)
+      // `root.fill` is read here as well as inside gradientPair, so switching
+      // the fill re-evaluates the pair. A function call is not a dependency.
+      readonly property var pair: root.fill === root.fill
+        ? root.gradientPair(index, modelData) : null
 
       x: root.barX(index)
       // Already on the device grid: barGeometry rounds the length once and

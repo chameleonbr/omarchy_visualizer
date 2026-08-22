@@ -179,3 +179,16 @@ no error.
 field is `focus: false` and takes the keyboard only on a click; escape inside
 it hands focus back through `dismissed()`. Opening a picker with a digit
 leaves focus on the body deliberately — the next letter is still a setting.
+
+**`barGradientPair` has to be told which fill asked for it.** It was not, once,
+which is why `fill` had three values and two behaviours — `barGradient` and
+`screenGradient` rendered the same picture, and under a position palette like
+`rainbow` neither rendered a gradient at all. The checks now assert that the
+two tips differ for every palette, that a `barGradient` tip never depends on
+the value while a `screenGradient` tip always does, and that no palette draws a
+gradient between a colour and itself.
+
+**A QML binding that only calls a function has no dependency on what the
+function reads.** `Spectrum.qml`'s `pair` reads `root.fill` in its own
+expression for that reason; without it, switching the fill left every bar
+painted from the pair it was built with.
