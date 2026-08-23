@@ -1106,4 +1106,63 @@ check("the mix does not present itself as somewhere to play", () => {
     "picking it as an output sends audio into a sink with no way out")
 })
 
+// ------------------------------------------------- choosing a microphone
+
+check("the source list leaves monitors out", () => {
+  const script = sourceListCommand()[2]
+  assert.ok(script.indexOf("monitor") > 0,
+    "a monitor is the other half of the mix, not a microphone")
+  assert.deepStrictEqual(parseSourceList("a\nb\n\na\n"), ["a", "b"],
+    "blank lines and repeats are not devices")
+  assert.deepStrictEqual(parseSourceList(""), [])
+  assert.deepStrictEqual(parseSourceList(null), [])
+})
+
+check("a source is named by the part that tells it apart", () => {
+  const full = "alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Mic1__source"
+  assert.strictEqual(sourceLabel(full), "Mic1")
+  assert.strictEqual(sourceLabel("bluez_input.C0:DA:5E:AB:82:10"), "bluez_input")
+  assert.strictEqual(sourceLabel(""), "")
+})
+
+check("a microphone that is gone falls back to the system default", () => {
+  const names = [
+    "alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Mic1__source",
+    "bluez_input.C0:DA:5E:AB:82:10"
+  ]
+  assert.strictEqual(resolveSource("Mic1", names), names[0])
+  // Empty is what the service ORs against the default, so both of these mean
+  // "use whatever the system says".
+  assert.strictEqual(resolveSource("Headset", names), "",
+    "unplugged is not a device to keep pointing at")
+  assert.strictEqual(resolveSource("", names), "")
+  assert.strictEqual(resolveSource("Mic1", []), "")
+})
+
+check("the microphone row offers the default and every device once", () => {
+  const names = ["x__Mic1__source", "y__Mic1__source", "bluez_input.AA"]
+  const row = micRows(names)[0]
+  assert.strictEqual(row.key, "micDevice")
+  assert.deepStrictEqual(row.values, ["", "Mic1", "bluez_input"],
+    "two cards with the same short name are one choice, not two")
+  assert.strictEqual(row.values[0], "", "the system default leads")
+})
+
+check("no two rows answer to the same key", () => {
+  const all = SETTING_ROWS.concat(MIC_ROWS).concat(WLED_ROWS)
+  const seen = {}
+  for (const row of all) {
+    assert.ok(!seen[row.accel], "two rows share the accelerator " + row.accel)
+    seen[row.accel] = true
+  }
+})
+
+check("the manifest offers the microphone with a default that means system", () => {
+  const manifest = JSON.parse(fs.readFileSync(__dirname + "/manifest.json", "utf8"))
+  const entry = manifest.barWidget.schema.find(s => s.key === "micDevice")
+  assert.ok(entry, "a setting the pane writes has to be one the manifest declares")
+  assert.strictEqual(entry.defaultValue, "")
+  assert.strictEqual(manifest.barWidget.defaults.micDevice, "")
+})
+
 console.log(passed + " checks passed")

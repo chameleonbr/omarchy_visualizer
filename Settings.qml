@@ -26,9 +26,18 @@ Item {
   // light, on the same principle as the colour rows: a control that cannot
   // change anything is worse than an absent one.
   readonly property var wledNames: service ? service.wledNames : []
-  readonly property var rows: root.wledNames.length > 0
-    ? Vis.SETTING_ROWS.concat(Vis.wledRows(root.wledNames))
-    : Vis.SETTING_ROWS
+  readonly property var micNames: service ? service.micNames : []
+  readonly property string input: service ? service.value("input") : "system"
+
+  readonly property var rows: {
+    var out = Vis.SETTING_ROWS
+    // Same principle: offered only when the input uses a microphone at all, and
+    // only when there is something to pick besides the system default.
+    if (root.input !== "system" && root.micNames.length > 0)
+      out = out.concat(Vis.micRows(root.micNames))
+    if (root.wledNames.length > 0) out = out.concat(Vis.wledRows(root.wledNames))
+    return out
+  }
 
   property string editing: ""
 

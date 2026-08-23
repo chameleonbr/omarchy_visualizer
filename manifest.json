@@ -27,6 +27,7 @@
       "fill": "solid",
       "palette": "accent",
       "input": "system",
+      "micDevice": "",
       "showPeaks": false,
       "showWave": false,
       "spread": 1,
@@ -130,6 +131,13 @@
           "both"
         ],
         "defaultValue": "system"
+      },
+      {
+        "key": "micDevice",
+        "type": "string",
+        "label": "Microphone",
+        "description": "Which microphone the mic and both inputs listen to. Empty follows the system default, which is not always one with signal on it: a bluetooth headset in A2DP offers an input that is silence. Named by the short part of the device name.",
+        "defaultValue": ""
       },
       {
         "key": "showPeaks",

@@ -116,6 +116,10 @@ Item {
       applyInput()
     }
 
+    // Not part of `restart`: the microphone is read from the config cava is
+    // given, and onActiveMicChanged rewrites and restarts it when it resolves.
+    micDevice = String(settings.micDevice || "")
+
     wledEnabled = settings.wledEnabled === true
     var wantedStyle = String(settings.wledStyle || "spectrum")
     wledStyle = Vis.WLED_STYLES.indexOf(wantedStyle) >= 0 ? wantedStyle : "spectrum"
@@ -212,7 +216,7 @@ Item {
     if (makeDir.running || configReady !== true) return
     configFile.setText(Vis.cavaConfig({
       barCount: barCount, framerate: framerate,
-      input: input, micSource: micSource
+      input: input, micSource: activeMic
     }))
     if (cava.running) restartCava()
   }
@@ -289,6 +293,25 @@ Item {
     }
   }
 
+  // What the settings pane chose, by short label; empty means the system
+  // default. The visualizer wants a microphone that has signal on it, which is
+  // not always the one calls should use — a bluetooth headset in A2DP offers an
+  // input node that is digital silence.
+  property string micDevice: ""
+  property var micNames: []
+
+  readonly property string activeMic:
+    Vis.resolveSource(root.micDevice, root.micNames) || root.micSource
+
+  Process {
+    id: sourceList
+    command: Vis.sourceListCommand()
+    stdout: StdioCollector { id: sourceListText }
+    onExited: function(code) {
+      if (code === 0) root.micNames = Vis.parseSourceList(sourceListText.text)
+    }
+  }
+
   Process {
     id: sourceQuery
     command: Vis.defaultSourceCommand()
@@ -306,8 +329,8 @@ Item {
   // depends on the input. `auto` is resolved once, inside a cava that is
   // already running. The mix's loopback is pinned once, inside a module that is
   // already loaded. Neither notices a headset arriving on its own.
-  onMicSourceChanged: {
-    if (!micSource) return
+  onActiveMicChanged: {
+    if (!activeMic) return
     if (input === "mic") writeConfig()
     else if (input === "both") rebuildMix()
   }
@@ -332,6 +355,10 @@ Item {
       if (root.input !== "system") {
         sourceQuery.running = false
         sourceQuery.running = true
+        // Asked with them: a microphone appears and disappears the same way a
+        // sink does, and the settings pane offers whatever is there now.
+        sourceList.running = false
+        sourceList.running = true
       }
     }
   }
@@ -352,6 +379,7 @@ Item {
     // that silently reads the wrong device.
     sourceQuery.running = false
     sourceQuery.running = true
+    sourceList.running = true
     if (input === "both") {
       sinkQuery.running = true
       buildTimer.restart()
@@ -367,11 +395,11 @@ Item {
   }
 
   function buildMix() {
-    if (mixBuilt || !sinkMonitor || !micSource) return
+    if (mixBuilt || !sinkMonitor || !activeMic) return
     mixBuilt = true
     // Appended, not assigned: a teardown queued by rebuildMix has to run first,
     // and replacing the queue would drop it and load a second set of modules.
-    mixQueue = mixQueue.concat(Vis.mixSetupCommands(sinkMonitor, micSource))
+    mixQueue = mixQueue.concat(Vis.mixSetupCommands(sinkMonitor, activeMic))
     pumpMix()
   }
 

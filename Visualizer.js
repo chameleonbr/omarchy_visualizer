@@ -205,6 +205,57 @@ function defaultSinkCommand() {
   return ["sh", "-c", "pactl get-default-sink 2>/dev/null"]
 }
 
+var MAX_SOURCES = 32
+
+// Monitors are left out on purpose: a monitor is what a sink is already
+// playing, which is the other half of the mix and not a microphone.
+function sourceListCommand() {
+  return ["sh", "-c",
+    "pactl list short sources 2>/dev/null"
+    + " | awk '$2 !~ /[.]monitor$/ { print $2 }'"]
+}
+
+function parseSourceList(text) {
+  var out = []
+  if (!text) return out
+  var lines = String(text).split("\n")
+  for (var i = 0; i < lines.length && out.length < MAX_SOURCES; i++) {
+    var name = lines[i].trim()
+    if (name && out.indexOf(name) < 0) out.push(name)
+  }
+  return out
+}
+
+// pactl names carry the whole card in them, and the settings pane has one row
+// to say it in. What tells two microphones apart is the short part, so that is
+// what is offered and what gets written down.
+function sourceLabel(name) {
+  var text = String(name || "")
+  var parts = text.split("__")
+  if (parts.length >= 3) return parts[parts.length - 2]
+  return text.split(".")[0] || text
+}
+
+function sourceLabels(names) {
+  var out = []
+  for (var i = 0; i < (names || []).length; i++) {
+    var label = sourceLabel(names[i])
+    if (label && out.indexOf(label) < 0) out.push(label)
+  }
+  return out
+}
+
+// The full name is found again from the list rather than stored, so a device
+// that is gone resolves to nothing and the system default is used instead —
+// which is what a microphone that was unplugged should do.
+function resolveSource(label, names) {
+  if (!label) return ""
+  for (var i = 0; i < (names || []).length; i++) {
+    if (sourceLabel(names[i]) === label) return names[i]
+  }
+  return ""
+}
+
 function defaultSourceCommand() {
   return ["sh", "-c", "pactl get-default-source 2>/dev/null"]
 }
@@ -439,6 +490,7 @@ var DEFAULTS = {
   fill: "solid",
   palette: "accent",
   input: "system",
+  micDevice: "",
   barCount: 14,
   segments: 8,
   framerate: 30,
@@ -1069,6 +1121,13 @@ function wledRows(names) {
 
 // Over the rows on screen rather than every row there is: a letter for a
 // setting the pane is not showing must do nothing.
+// Offered only when there is more than the system default to choose from.
+function micRows(names) {
+  return [{ key: "micDevice", accel: "n", values: [""].concat(sourceLabels(names)) }]
+}
+
+var MIC_ROWS = micRows([])
+
 function rowForAccel(accel, rows) {
   var list = rows || SETTING_ROWS
   var wanted = String(accel || "").toLowerCase()

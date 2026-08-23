@@ -48,6 +48,7 @@ var STRINGS = {
     "row.fill": "fill",
     "row.palette": "palette",
     "row.input": "input",
+    "row.micDevice": "mic",
     "row.showPeaks": "peak",
     "row.showWave": "wave",
     "row.barCount": "bars",
@@ -63,6 +64,10 @@ var STRINGS = {
     // The empty device setting is every light the config lists, so it says so
     // rather than showing as blank. A named device shows as its own name:
     // nobody translates what someone called their lamp.
+    // Empty means whatever the system calls default. A named device shows as
+    // the short part of its own name, which is what tells two microphones apart.
+    "micDevice.": "system",
+
     "wledDevices.": "all",
 
     "wledStyle.spectrum": "spectrum",
@@ -130,6 +135,7 @@ var STRINGS = {
     "row.fill": "preenchimento",
     "row.palette": "paleta",
     "row.input": "entrada",
+    "row.micDevice": "microfone",
     "row.showPeaks": "pico",
     "row.showWave": "onda",
     "row.barCount": "barras",
@@ -141,6 +147,8 @@ var STRINGS = {
     "row.wledDevices": "dispositivos",
     "row.wledRateHz": "taxa wled",
     "row.wledRestore": "restaurar ao parar",
+
+    "micDevice.": "sistema",
 
     "wledDevices.": "todos",
 
