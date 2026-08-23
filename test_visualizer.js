@@ -1062,4 +1062,29 @@ check("naming a device still picks it out of the file", () => {
   assert.deepStrictEqual(wledHostList(parsed, ["nobody"]), [])
 })
 
+check("the mix is never fed from its own monitor", () => {
+  assert.ok(isMixMonitor("omarchy_visualizer_mix.monitor"),
+    "a loopback from the mix into the mix is a feedback loop")
+  assert.ok(!isMixMonitor("bluez_output.C0_DA_5E_AB_82_10.1.monitor"))
+  assert.ok(!isMixMonitor(""))
+  assert.ok(!isMixMonitor(null))
+})
+
+check("the mix asks not to be made the default sink", () => {
+  const props = mixSetupCommands("a.monitor", "b").
+    find(c => c.indexOf("module-null-sink") >= 0).
+    find(a => String(a).indexOf("sink_properties=") === 0)
+  assert.ok(props.indexOf("priority.session=0") > 0,
+    "the newest sink is what gets promoted, and this one plays to nothing")
+})
+
+check("the mix is rebuilt around the device, not the name", () => {
+  const built = mixSetupCommands("headphones.monitor", "mic1")
+  assert.ok(built[1].indexOf("source=headphones.monitor") > 0)
+  assert.ok(built[2].indexOf("source=mic1") > 0)
+  // The sink name is fixed, which is why cava's config survives a rebuild and
+  // only its capture has to be reopened.
+  assert.ok(built[0].indexOf("sink_name=" + MIX_SINK) > 0)
+})
+
 console.log(passed + " checks passed")

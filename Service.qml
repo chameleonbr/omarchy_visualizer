@@ -278,7 +278,14 @@ Item {
     id: sinkQuery
     command: Vis.defaultSinkCommand()
     stdout: SplitParser {
-      onRead: function(line) { root.sinkMonitor = line.trim() + ".monitor" }
+      onRead: function(line) {
+        var name = line.trim()
+        if (!name) return
+        // Its own monitor is a feedback loop, so the last real sink is kept
+        // instead. Not building the mix is the safe way to be wrong here.
+        if (Vis.isMixMonitor(name)) return
+        root.sinkMonitor = name + ".monitor"
+      }
     }
   }
 
@@ -294,8 +301,40 @@ Item {
   // the config was written before they did — so "mic" wrote `source = ` and
   // cava fell back to its own default, which is the system audio. The config is
   // rewritten when the name lands, which is the only moment it can be correct.
-  onMicSourceChanged: if (input === "mic" && micSource) writeConfig()
-  onSinkMonitorChanged: if (input === "both" && sinkMonitor) buildTimer.restart()
+  //
+  // A device name that changed is a device that moved, and what that costs
+  // depends on the input. `auto` is resolved once, inside a cava that is
+  // already running. The mix's loopback is pinned once, inside a module that is
+  // already loaded. Neither notices a headset arriving on its own.
+  onMicSourceChanged: {
+    if (!micSource) return
+    if (input === "mic") writeConfig()
+    else if (input === "both") rebuildMix()
+  }
+
+  onSinkMonitorChanged: {
+    if (!sinkMonitor) return
+    if (input === "both") rebuildMix()
+    else if (input === "system" && cava.running) restartCava()
+  }
+
+  // `pactl subscribe` is not the answer: switching the default sink emits no
+  // event for it at all. So the question is asked again, at a rate a person
+  // plugging in headphones would not notice.
+  Timer {
+    id: deviceWatch
+    running: root.running
+    interval: 3000
+    repeat: true
+    onTriggered: {
+      sinkQuery.running = false
+      sinkQuery.running = true
+      if (root.input !== "system") {
+        sourceQuery.running = false
+        sourceQuery.running = true
+      }
+    }
+  }
 
   Process { id: mixProcess }
   property var mixQueue: []
@@ -330,8 +369,22 @@ Item {
   function buildMix() {
     if (mixBuilt || !sinkMonitor || !micSource) return
     mixBuilt = true
-    mixQueue = Vis.mixSetupCommands(sinkMonitor, micSource)
+    // Appended, not assigned: a teardown queued by rebuildMix has to run first,
+    // and replacing the queue would drop it and load a second set of modules.
+    mixQueue = mixQueue.concat(Vis.mixSetupCommands(sinkMonitor, micSource))
     pumpMix()
+  }
+
+  // Tear the mix down and put it back around the device that is default now.
+  // Both halves go through the same queue, so the unload cannot land after the
+  // load it was supposed to precede.
+  function rebuildMix() {
+    if (mixBuilt) {
+      mixBuilt = false
+      mixQueue = mixQueue.concat([Vis.mixTeardownCommand()])
+      pumpMix()
+    }
+    buildTimer.restart()
   }
 
   function pumpMix() {
@@ -343,7 +396,13 @@ Item {
 
   Connections {
     target: mixProcess
-    function onExited() { root.pumpMix() }
+    function onExited() {
+      root.pumpMix()
+      // The null sink cava was capturing has just been destroyed and remade, so
+      // the capture it still holds is on a device that no longer exists.
+      if (!mixProcess.running && root.mixQueue.length === 0
+        && root.mixBuilt && cava.running) root.restartCava()
+    }
   }
 
   function teardownMix() {

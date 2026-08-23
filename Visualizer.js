@@ -164,15 +164,27 @@ function inputSource(input, micSource) {
 //
 // Built only while it is needed and torn down after, because leaving a stray
 // sink in someone's audio graph is the kind of mess that outlives the widget.
+// A sink the session manager must not choose. Without the priority it is the
+// newest sink on the graph, which is exactly what WirePlumber promotes to
+// default — and a default that plays into a null sink is silence with no
+// visible cause.
 function mixSetupCommands(sinkMonitor, micSource) {
   return [
     ["pactl", "load-module", "module-null-sink",
-      "sink_name=" + MIX_SINK, "sink_properties=device.description=Visualizer"],
+      "sink_name=" + MIX_SINK,
+      "sink_properties=device.description=Visualizer priority.session=0"],
     ["pactl", "load-module", "module-loopback",
       "source=" + sinkMonitor, "sink=" + MIX_SINK, "latency_msec=50"],
     ["pactl", "load-module", "module-loopback",
       "source=" + micSource, "sink=" + MIX_SINK, "latency_msec=50"]
   ]
+}
+
+// The mix must never be fed from its own monitor. If it ever does become the
+// default sink, the monitor of "the default sink" is its own, and a loopback
+// from a sink into itself is a feedback loop with a microphone in it.
+function isMixMonitor(name) {
+  return String(name || "").indexOf(MIX_SINK) === 0
 }
 
 // Unloading by module id would mean tracking three of them across restarts and
