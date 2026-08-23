@@ -836,11 +836,15 @@ function toBytes(color) {
 
 // The WLED JSON state API. One colour for the whole strip: the `solid` style,
 // and what every style falls back to before the strip has said how long it is.
+//
+// `frz: false` because the band-by-band payload freezes the segment: falling
+// back to solid without lifting that would leave the strip stuck on whichever
+// spectrum frame happened to be the last one.
 function wledPayload(brightness, color) {
   return JSON.stringify({
     on: true,
     bri: brightness,
-    seg: [{ col: [toBytes(color)] }]
+    seg: [{ id: 0, frz: false, col: [toBytes(color)] }]
   })
 }
 
@@ -912,14 +916,21 @@ function wledRuns(frame, palette, ctx, ledCount, style) {
   return runs
 }
 
-// `fx: 0` is solid: without it WLED's effect engine repaints over the LEDs the
-// moment it next ticks, and the strip flickers between the spectrum and
-// whatever pattern it was left on.
+// `frz: true` is the whole trick, and the reason a first attempt at this drew
+// nothing but one colour. WLED's effect engine owns the segment: it repaints
+// every LED on its next tick, so individual LEDs written underneath it survive
+// for a few milliseconds and are then painted over with the effect's own
+// colour. Freezing the segment stops that loop and leaves the LEDs as written.
+//
+// Not `fx: 0`. Setting the effect to Solid also stops the pattern, but Solid
+// is an effect like any other — it fills the segment with the primary colour,
+// so it overwrites the spectrum just as surely — and it would quietly replace
+// whatever effect the strip was set to, which is not this bridge's to change.
 function wledLivePayload(brightness, runs) {
   return JSON.stringify({
     on: true,
     bri: brightness,
-    seg: [{ id: 0, fx: 0, i: runs }]
+    seg: [{ id: 0, frz: true, i: runs }]
   })
 }
 
@@ -958,7 +969,10 @@ function parseWledInfo(line) {
 // Leaving a lamp frozen on a colour after the music stops is the worst thing
 // this bridge can do, so the restore is explicit and idempotent.
 function wledRestorePayload(previous) {
-  if (!previous) return JSON.stringify({ on: false })
+  // The freeze has to be lifted whatever else happens, or the strip keeps the
+  // last frame of the spectrum for as long as it stays on and its own effects
+  // never run again.
+  if (!previous) return JSON.stringify({ on: false, seg: [{ id: 0, frz: false }] })
   return JSON.stringify({
     on: previous.on !== false,
     bri: Number(previous.bri) || 128,

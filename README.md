@@ -193,6 +193,15 @@ can do that a bulb cannot.
 | `mirror` | the same, folded so the low bands meet in the middle and travel out to both ends |
 | `solid` | one colour for the whole strip, brightness following the mean — what a bulb wants |
 
+The segment is frozen while the bridge is running. WLED's effect engine owns
+the segment and repaints every LED on its next tick, so individual LEDs
+written underneath it last a few milliseconds — freezing is what makes them
+stay. Setting the effect to Solid is not the same thing: Solid is an effect
+like any other and fills the segment with the primary colour, and it would
+quietly replace whichever effect the strip was set to. The freeze is lifted on
+the way out, both when the music stops and when the mode falls back to
+`solid`; leave it on and the strip keeps the last frame forever.
+
 The strip is asked how long it is once, when the bridge starts, and painted in
 runs rather than one colour per LED: fourteen `[start, stop, colour]` triplets
 is a payload a device with a few hundred kilobytes of RAM can read ten times a

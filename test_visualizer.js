@@ -923,12 +923,26 @@ check("a strip that has not answered yet is not painted band by band", () => {
   assert.deepStrictEqual(wledRuns(null, "rainbow", ctx, 30, "spectrum"), [])
 })
 
-check("the live payload paints one segment and stops the effect engine", () => {
+check("the live payload freezes the segment it paints", () => {
+  // The bug this replaced: the effect engine owns the segment and repaints
+  // every LED on its next tick, so individual LEDs written underneath it last
+  // a few milliseconds and the strip shows one colour. Freezing stops that.
   const payload = JSON.parse(wledLivePayload(200, [0, 4, "FF0000"]))
   assert.strictEqual(payload.on, true)
   assert.strictEqual(payload.bri, 200)
-  assert.strictEqual(payload.seg[0].fx, 0, "without this WLED repaints over the spectrum")
+  assert.strictEqual(payload.seg[0].frz, true, "without this the effect paints over it")
+  assert.strictEqual(payload.seg[0].fx, undefined,
+    "the strip's own effect is not this bridge's to change")
   assert.deepStrictEqual(payload.seg[0].i, [0, 4, "FF0000"])
+})
+
+check("every way out of the spectrum lifts the freeze", () => {
+  // A frozen segment keeps the last frame for as long as it stays on, and the
+  // strip's own effects never run again.
+  assert.strictEqual(JSON.parse(wledPayload(128, { r: 1, g: 0, b: 0 })).seg[0].frz, false,
+    "falling back to solid")
+  assert.strictEqual(JSON.parse(wledRestorePayload(null)).seg[0].frz, false,
+    "and stopping altogether")
 })
 
 check("the strip is asked its length once, per host, as data", () => {
