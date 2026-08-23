@@ -441,6 +441,7 @@ var DEFAULTS = {
   pauseOnBattery: true,
   pauseWhenSilent: true,
   wledEnabled: false,
+  wledStyle: "spectrum",
   wledRateHz: 10,
   wledDevices: "",
   wledRestore: true
@@ -833,14 +834,125 @@ function toBytes(color) {
   ]
 }
 
-// The WLED JSON state API. `bri` and one segment colour is all this needs;
-// anything richer belongs in WLED's own interface.
+// The WLED JSON state API. One colour for the whole strip: the `solid` style,
+// and what every style falls back to before the strip has said how long it is.
 function wledPayload(brightness, color) {
   return JSON.stringify({
     on: true,
     bri: brightness,
     seg: [{ col: [toBytes(color)] }]
   })
+}
+
+// ------------------------------------------------------- the whole strip
+//
+// A strip is not a lamp. Sending it one colour throws away the only thing it
+// can do that a bulb cannot: show the spectrum as a spectrum, low bands at one
+// end and high at the other, each one lit by how loud it actually is.
+
+var WLED_STYLES = ["spectrum", "mirror", "solid"]
+
+// Colour never falls all the way to black. A band at rest that goes dark takes
+// its stretch of the strip out of the picture entirely, and the strip stops
+// reading as a spectrum and starts reading as a fault.
+var WLED_FLOOR = 0.1
+
+function wledHex(color) {
+  var bytes = toBytes(color)
+  var text = ""
+  for (var i = 0; i < bytes.length; i++) {
+    var part = bytes[i].toString(16)
+    text += part.length === 1 ? "0" + part : part
+  }
+  return text.toUpperCase()
+}
+
+// Which band a given LED belongs to, for each style. `spectrum` lays the bands
+// along the strip; `mirror` folds them so the low bands meet in the middle,
+// which is what a strip behind a desk usually wants — the movement starts at
+// the centre and travels out to both ends.
+function wledBandAt(led, ledCount, bands, style) {
+  var count = Math.max(1, ledCount)
+  if (style === "mirror") {
+    var half = count / 2
+    var distance = led < half ? half - 1 - led : led - half
+    return clamp(Math.floor(distance / Math.max(1, half) * bands), 0, bands - 1)
+  }
+  return clamp(Math.floor(led / count * bands), 0, bands - 1)
+}
+
+// WLED's range form: `[start, stop, "RRGGBB", start, stop, "RRGGBB", …]`, stop
+// exclusive. Runs rather than one colour per LED because this goes out ten
+// times a second over HTTP to a device with a few hundred kilobytes of RAM:
+// fourteen triplets is a payload it can read, three hundred hex strings is one
+// it drops.
+function wledRuns(frame, palette, ctx, ledCount, style) {
+  var count = Math.floor(Number(ledCount) || 0)
+  var bands = frame ? frame.length : 0
+  if (!bands || count < 1) return []
+
+  var runs = []
+  var start = 0
+  var current = ""
+
+  for (var led = 0; led < count; led++) {
+    var band = wledBandAt(led, count, bands, style)
+    var value = clamp(Number(frame[band]) || 0, 0, FRAME_MAX)
+    var color = paletteColor(palette, band, bands, value, ctx)
+    var lit = dim(color, WLED_FLOOR + (1 - WLED_FLOOR) * (value / FRAME_MAX))
+    var hex = wledHex(lit)
+
+    if (hex !== current) {
+      if (current !== "") runs.push(start, led, current)
+      start = led
+      current = hex
+    }
+  }
+  if (current !== "") runs.push(start, count, current)
+  return runs
+}
+
+// `fx: 0` is solid: without it WLED's effect engine repaints over the LEDs the
+// moment it next ticks, and the strip flickers between the spectrum and
+// whatever pattern it was left on.
+function wledLivePayload(brightness, runs) {
+  return JSON.stringify({
+    on: true,
+    bri: brightness,
+    seg: [{ id: 0, fx: 0, i: runs }]
+  })
+}
+
+// The strip has to say how long it is before it can be painted band by band.
+// One process for every device, because a light that does not answer must not
+// stop the others being asked.
+function wledInfoCommand(hosts) {
+  return ["sh", "-c",
+    'for h in "$@"; do ' +
+    '  printf "%s\t" "$h"; ' +
+    '  curl -s -m 2 "http://$h/json/info" | tr -d "\r\n"; ' +
+    '  printf "\n"; ' +
+    'done',
+    "omarchy-visualizer"].concat(hosts || [])
+}
+
+function parseWledInfo(line) {
+  var at = String(line || "").indexOf("\t")
+  if (at < 0) return null
+  var host = line.slice(0, at)
+  var body = line.slice(at + 1)
+  if (!host || !body) return null
+
+  var parsed
+  try {
+    parsed = JSON.parse(body)
+  } catch (error) {
+    return null
+  }
+
+  var count = parsed && parsed.leds ? Number(parsed.leds.count) : 0
+  if (!count || count < 1) return null
+  return { host: host, count: Math.floor(count) }
 }
 
 // Leaving a lamp frozen on a colour after the music stops is the worst thing
@@ -892,6 +1004,7 @@ var COLOR_ACCELS = ["1", "2", "3"]
 // teaches people its controls are decoration.
 var WLED_ROWS = [
   { key: "wledEnabled", accel: "d", values: [false, true] },
+  { key: "wledStyle", accel: "m", values: WLED_STYLES },
   // Filled in from the config: the values are the lights someone actually
   // has, and "" is all of them.
   { key: "wledDevices", accel: "v", values: [""] },

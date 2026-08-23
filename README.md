@@ -176,10 +176,32 @@ Turn on `wled` in the settings pane and the lights configured for the
 [WLED plugin](https://github.com/chameleonbr/omarchy_wled) show the colour the
 bar is showing. That file is read, never written — it belongs to that plugin.
 
-The pane grows four rows when that file names a light: whether the bridge is
-on, which light to drive, how fast, and whether to put it back when the music
-stops. `devices` cycles through the names from that file — the ones their
-owner gave them, untranslated — and `all` means every light it lists.
+The pane grows five rows when that file names a light: whether the bridge is
+on, which mode, which light to drive, how fast, and whether to put it back
+when the music stops. `devices` cycles through the names from that file — the
+ones their owner gave them, untranslated — and `all` means every light it
+lists.
+
+### Modes
+
+A strip is not a lamp, and sending it one colour throws away the only thing it
+can do that a bulb cannot.
+
+| Mode | What the strip shows |
+|---|---|
+| `spectrum` | the bands laid along the strip, low at one end, each lit by how loud it is |
+| `mirror` | the same, folded so the low bands meet in the middle and travel out to both ends |
+| `solid` | one colour for the whole strip, brightness following the mean — what a bulb wants |
+
+The strip is asked how long it is once, when the bridge starts, and painted in
+runs rather than one colour per LED: fourteen `[start, stop, colour]` triplets
+is a payload a device with a few hundred kilobytes of RAM can read ten times a
+second; three hundred hex strings is one it drops. Until it answers, and for a
+single bulb, every mode falls back to `solid` — the bridge works from the
+first frame and sharpens once the strip has spoken.
+
+A band at rest is dim, never black. A dark stretch of strip reads as a fault
+rather than as quiet.
 
 Three things this gets right, and they are all about the hardware:
 
@@ -212,6 +234,7 @@ Everything is in the widget's settings screen. The ones worth knowing:
 | `wledEnabled` | off | mirror onto the lights |
 | `wledRateHz` | 10 | how fast the lamp is asked to follow |
 | `wledDevices` | all | narrow the bridge to one light |
+| `wledStyle` | `spectrum` | how the strip is painted |
 
 ## Development
 
@@ -248,12 +271,12 @@ colour inside its own label:
 | `c` | cap | `g` | language |
 | `f` | fill | `d` | wled |
 | `p` | palette | `v` | devices |
-| `i` | input | `t` | wled rate |
-| `e` | peak | `o` | restore on stop |
-| `w` | wave | `a` | bars |
-| `l` | fall | | |
+| `i` | input | `m` | wled mode |
+| `e` | peak | `t` | wled rate |
+| `w` | wave | `o` | restore on stop |
+| `l` | fall | `a` | bars |
 
-The last four are only there when the WLED plugin's config names a light, and
+The last five are only there when the WLED plugin's config names a light, and
 so are their letters: on a machine with no lights `d` does nothing rather than
 flipping a setting nobody can see.
 

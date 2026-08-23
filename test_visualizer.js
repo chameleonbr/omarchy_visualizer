@@ -846,7 +846,8 @@ check("the wled rows are offered only when there is a light to point at", () => 
   const devices = rows.filter((row) => row.key === "wledDevices")[0]
   assert.deepStrictEqual(devices.values, ["", "desk", "wled-shelf"],
     "empty is every light the config lists")
-  assert.deepStrictEqual(wledRows([])[1].values, [""], "nothing to narrow to")
+  const empty = wledRows([]).filter((row) => row.key === "wledDevices")[0]
+  assert.deepStrictEqual(empty.values, [""], "nothing to narrow to")
 })
 
 check("a device list longer than the ceiling offers no more than the ceiling", () => {
@@ -860,6 +861,94 @@ check("a letter for a row that is not on screen does nothing", () => {
   assert.strictEqual(rowForAccel("d", SETTING_ROWS.concat(wledRows([]))).key, "wledEnabled")
   assert.strictEqual(rowForAccel("p", SETTING_ROWS.concat(wledRows([]))).key, "palette",
     "the axes are still there")
+})
+
+check("the strip is painted band by band, in runs rather than per LED", () => {
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  const frame = [10, 50, 90, 20]
+  const runs = wledRuns(frame, "rainbow", ctx, 12, "spectrum")
+
+  assert.strictEqual(runs.length % 3, 0, "start, stop, colour")
+  assert.strictEqual(runs.length, 12, "four bands, four runs — not twelve LEDs")
+  assert.strictEqual(runs[0], 0, "the first run starts at the first LED")
+  assert.strictEqual(runs[runs.length - 2], 12, "and the last one ends at the last")
+
+  for (let i = 0; i + 3 < runs.length; i += 3) {
+    assert.strictEqual(runs[i + 1], runs[i + 3], "no LED is left unpainted")
+  }
+  for (let i = 2; i < runs.length; i += 3) {
+    assert.ok(/^[0-9A-F]{6}$/.test(runs[i]), "WLED wants RRGGBB: " + runs[i])
+  }
+})
+
+check("a band that is quiet is dim, not missing", () => {
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  const loud = wledRuns([100], "rainbow", ctx, 4, "spectrum")[2]
+  const quiet = wledRuns([0], "rainbow", ctx, 4, "spectrum")[2]
+  assert.notStrictEqual(quiet, "000000", "a dark stretch reads as a fault, not as quiet")
+  assert.notStrictEqual(quiet, loud, "and it is still darker than a loud one")
+})
+
+check("every band gets its own colour, which is what a strip is for", () => {
+  // The bug this replaced: the payload asked the palette for band 0 of 1, so
+  // a position palette answered with the same hue every time and the whole
+  // strip was one colour no matter what was playing.
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  const runs = wledRuns([60, 60, 60, 60], "rainbow", ctx, 8, "spectrum")
+  const colors = []
+  for (let i = 2; i < runs.length; i += 3) colors.push(runs[i])
+  assert.strictEqual(new Set(colors).size, colors.length, "four bands, four colours")
+})
+
+check("mirror folds the same bands around the middle", () => {
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  const runs = wledRuns([10, 50, 90, 20], "rainbow", ctx, 12, "mirror")
+  const first = runs[2]
+  const last = runs[runs.length - 1]
+  assert.strictEqual(first, last, "both ends show the same band")
+  assert.strictEqual(wledBandAt(0, 12, 4, "mirror"), wledBandAt(11, 12, 4, "mirror"))
+  assert.strictEqual(wledBandAt(5, 12, 4, "mirror"), wledBandAt(6, 12, 4, "mirror"),
+    "and the middle is where the low band lives")
+})
+
+check("a strip that has not answered yet is not painted band by band", () => {
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  assert.deepStrictEqual(wledRuns([50], "rainbow", ctx, 0, "spectrum"), [])
+  assert.deepStrictEqual(wledRuns([], "rainbow", ctx, 30, "spectrum"), [])
+  assert.deepStrictEqual(wledRuns(null, "rainbow", ctx, 30, "spectrum"), [])
+})
+
+check("the live payload paints one segment and stops the effect engine", () => {
+  const payload = JSON.parse(wledLivePayload(200, [0, 4, "FF0000"]))
+  assert.strictEqual(payload.on, true)
+  assert.strictEqual(payload.bri, 200)
+  assert.strictEqual(payload.seg[0].fx, 0, "without this WLED repaints over the spectrum")
+  assert.deepStrictEqual(payload.seg[0].i, [0, 4, "FF0000"])
+})
+
+check("the strip is asked its length once, per host, as data", () => {
+  const command = wledInfoCommand(["led.local", "$(touch /tmp/pwned)"])
+  assert.strictEqual(command[0], "sh")
+  assert.ok(command[2].indexOf("/json/info") > 0)
+  assert.ok(command[2].indexOf("-m 2") > 0, "a light that does not answer is not waited on")
+  assert.strictEqual(command[command.length - 1], "$(touch /tmp/pwned)",
+    "hosts are arguments, never script")
+  assert.strictEqual(command[2].indexOf("touch"), -1)
+})
+
+check("an answer that is not a strip is not believed", () => {
+  assert.deepStrictEqual(parseWledInfo("led.local\t{\"leds\":{\"count\":144}}"),
+    { host: "led.local", count: 144 })
+  assert.strictEqual(parseWledInfo("led.local\t"), null, "no answer at all")
+  assert.strictEqual(parseWledInfo("led.local\tnot json"), null)
+  assert.strictEqual(parseWledInfo("led.local\t{}"), null, "no length, no painting")
+  assert.strictEqual(parseWledInfo("no tab here"), null)
+  assert.strictEqual(parseWledInfo(""), null)
 })
 
 check("a light shows as whatever its owner called it", () => {

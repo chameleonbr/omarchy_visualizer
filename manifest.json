@@ -48,7 +48,8 @@
       "wledEnabled": false,
       "wledRateHz": 10,
       "wledDevices": "",
-      "wledRestore": true
+      "wledRestore": true,
+      "wledStyle": "spectrum"
     },
     "schema": [
       {
@@ -262,6 +263,13 @@
         "label": "WLED bridge",
         "description": "Mirror the spectrum onto WLED lights.",
         "defaultValue": false
+      },
+      {
+        "key": "wledStyle",
+        "type": "string",
+        "label": "WLED mode",
+        "description": "spectrum, mirror or solid.",
+        "defaultValue": "spectrum"
       },
       {
         "key": "wledRateHz",

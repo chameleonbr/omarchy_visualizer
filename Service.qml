@@ -117,6 +117,8 @@ Item {
     }
 
     wledEnabled = settings.wledEnabled === true
+    var wantedStyle = String(settings.wledStyle || "spectrum")
+    wledStyle = Vis.WLED_STYLES.indexOf(wantedStyle) >= 0 ? wantedStyle : "spectrum"
     wledRateHz = Math.max(1, Math.min(20, Number(settings.wledRateHz) || 10))
     wledDevices = String(settings.wledDevices || "")
     wledRestore = settings.wledRestore !== false
@@ -380,6 +382,40 @@ Item {
     return Vis.wledHostList(wledParsed, Vis.wledWantedNames(wledDevices))
   }
 
+  property string wledStyle: "spectrum"
+
+  // How long each strip is, by host. A strip cannot be painted band by band
+  // until it has said, and it is asked once per set of hosts rather than per
+  // frame — the answer does not change while the lights are on.
+  property var wledLedCounts: ({})
+
+  onWledHostsChanged: askWledSizes()
+  onWledEnabledChanged: if (wledEnabled) askWledSizes()
+
+  function askWledSizes() {
+    if (!wledEnabled || wledHosts.length === 0) return
+    wledInfo.running = false
+    wledInfo.command = Vis.wledInfoCommand(wledHosts)
+    wledInfo.running = true
+  }
+
+  Process {
+    id: wledInfo
+    command: Vis.wledInfoCommand([])
+    stdout: SplitParser {
+      onRead: function(line) {
+        var found = Vis.parseWledInfo(line)
+        if (!found) return
+        // Replaced rather than mutated: QML does not notice a property of a
+        // property changing, and the payload would go on using the old length.
+        var next = {}
+        for (var host in root.wledLedCounts) next[host] = root.wledLedCounts[host]
+        next[found.host] = found.count
+        root.wledLedCounts = next
+      }
+    }
+  }
+
   property real lastSentMs: 0
   property bool wledTouched: false
 
@@ -394,11 +430,27 @@ Item {
     lastSentMs = now
 
     var energy = Vis.frameEnergy(frame)
-    var color = Vis.wledColor(paletteName, energy, paletteContext)
-    var payload = Vis.wledPayload(Vis.wledBrightness(energy, 0, 255), color)
+    var solid = Vis.wledPayload(Vis.wledBrightness(energy, 0, 255),
+      Vis.wledColor(paletteName, energy, paletteContext))
 
     wledTouched = true
-    for (var i = 0; i < wledHosts.length; i++) send(wledHosts[i], payload)
+    for (var i = 0; i < wledHosts.length; i++) {
+      var host = wledHosts[i]
+      var leds = Number(wledLedCounts[host]) || 0
+
+      // A strip that has not answered yet gets the one-colour payload rather
+      // than nothing: the bridge works from the first frame and sharpens when
+      // the strip says how long it is.
+      if (wledStyle === "solid" || leds < 2) { send(host, solid); continue }
+
+      var runs = Vis.wledRuns(frame, paletteName, paletteContext, leds, wledStyle)
+      if (runs.length === 0) { send(host, solid); continue }
+
+      // The colours already carry how loud each band is, so global brightness
+      // only follows the room: dropping it to nothing as well would leave a
+      // quiet passage invisible rather than dim.
+      send(host, Vis.wledLivePayload(Vis.wledBrightness(energy, 96, 255), runs))
+    }
   }
 
   function restoreWled() {

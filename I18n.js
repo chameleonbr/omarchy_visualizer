@@ -55,6 +55,7 @@ var STRINGS = {
     "row.framerate": "fps",
     "row.language": "language",
     "row.wledEnabled": "wled",
+    "row.wledStyle": "wled mode",
     "row.wledDevices": "devices",
     "row.wledRateHz": "wled rate",
     "row.wledRestore": "restore on stop",
@@ -63,6 +64,10 @@ var STRINGS = {
     // rather than showing as blank. A named device shows as its own name:
     // nobody translates what someone called their lamp.
     "wledDevices.": "all",
+
+    "wledStyle.spectrum": "spectrum",
+    "wledStyle.mirror": "mirror",
+    "wledStyle.solid": "solid",
     "row.gradientFrom": "gradient from",
     "row.gradientTo": "gradient to",
     "row.solidColor": "colour",
@@ -132,11 +137,16 @@ var STRINGS = {
     "row.framerate": "fps",
     "row.language": "idioma",
     "row.wledEnabled": "wled",
+    "row.wledStyle": "modo wled",
     "row.wledDevices": "dispositivos",
     "row.wledRateHz": "taxa wled",
     "row.wledRestore": "restaurar ao parar",
 
     "wledDevices.": "todos",
+
+    "wledStyle.spectrum": "espectro",
+    "wledStyle.mirror": "espelho",
+    "wledStyle.solid": "sólido",
     "row.gradientFrom": "gradiente de",
     "row.gradientTo": "gradiente até",
     "row.solidColor": "cor",
