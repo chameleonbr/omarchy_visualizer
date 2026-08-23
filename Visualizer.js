@@ -172,7 +172,8 @@ function mixSetupCommands(sinkMonitor, micSource) {
   return [
     ["pactl", "load-module", "module-null-sink",
       "sink_name=" + MIX_SINK,
-      "sink_properties=device.description=Visualizer priority.session=0"],
+      "sink_properties=device.description=Visualizer priority.session=0"
+        + " device.class=filter"],
     ["pactl", "load-module", "module-loopback",
       "source=" + sinkMonitor, "sink=" + MIX_SINK, "latency_msec=50"],
     ["pactl", "load-module", "module-loopback",
@@ -187,13 +188,17 @@ function isMixMonitor(name) {
   return String(name || "").indexOf(MIX_SINK) === 0
 }
 
-// Unloading by module id would mean tracking three of them across restarts and
-// crashes; unloading by name removes exactly what was loaded and is safe to run
-// when nothing is loaded at all.
+// Unloading by module name would take every null sink and every loopback on the
+// machine with it, including ones the user set up themselves — and this now runs
+// on every device change rather than once. So the modules are found by the sink
+// they name in their own arguments, which is exactly this plugin's three and
+// nothing else. Tracking ids instead would lose them the moment the shell
+// crashes; the arguments survive that, so this also cleans up after one.
 function mixTeardownCommand() {
   return ["sh", "-c",
-    "pactl unload-module module-loopback 2>/dev/null;"
-    + " pactl unload-module module-null-sink 2>/dev/null; true"]
+    "pactl list short modules"
+    + " | awk '$2 ~ /^module-(null-sink|loopback)$/ && /" + MIX_SINK + "/ { print $1 }'"
+    + " | xargs -r -n1 pactl unload-module 2>/dev/null; true"]
 }
 
 function defaultSinkCommand() {

@@ -612,7 +612,9 @@ check("hearing both builds a device and takes it away again", () => {
 
   const teardown = mixTeardownCommand().join(" ")
   assert.ok(teardown.indexOf("unload-module") > 0)
-  assert.ok(teardown.indexOf("module-loopback") > 0 && teardown.indexOf("module-null-sink") > 0)
+  // The module types narrow what is looked at; the sink name decides which
+  // ones actually go. See the teardown check further down for that half.
+  assert.ok(teardown.indexOf("null-sink") > 0 && teardown.indexOf("loopback") > 0)
   assert.ok(teardown.indexOf("true") > 0, "safe to run when nothing is loaded")
 })
 
@@ -1085,6 +1087,23 @@ check("the mix is rebuilt around the device, not the name", () => {
   // The sink name is fixed, which is why cava's config survives a rebuild and
   // only its capture has to be reopened.
   assert.ok(built[0].indexOf("sink_name=" + MIX_SINK) > 0)
+})
+
+check("the teardown takes this plugin's modules and nobody else's", () => {
+  const script = mixTeardownCommand()[2]
+  assert.ok(script.indexOf(MIX_SINK) > 0,
+    "modules are found by the sink they name, not by being a null sink")
+  assert.ok(script.indexOf("unload-module module-null-sink") < 0
+    && script.indexOf("unload-module module-loopback") < 0,
+    "unloading by name would take every loopback on the machine with it")
+  assert.ok(script.indexOf("xargs") > 0, "what it finds is what it unloads")
+})
+
+check("the mix does not present itself as somewhere to play", () => {
+  const props = mixSetupCommands("a.monitor", "b")[0]
+    .find(a => String(a).indexOf("sink_properties=") === 0)
+  assert.ok(props.indexOf("device.class=filter") > 0,
+    "picking it as an output sends audio into a sink with no way out")
 })
 
 console.log(passed + " checks passed")
