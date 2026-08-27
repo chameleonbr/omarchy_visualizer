@@ -176,22 +176,81 @@ Turn on `wled` in the settings pane and the lights configured for the
 [WLED plugin](https://github.com/chameleonbr/omarchy_wled) show the colour the
 bar is showing. That file is read, never written — it belongs to that plugin.
 
-The pane grows five rows when that file names a light: whether the bridge is
-on, which mode, which light to drive, how fast, and whether to put it back
-when the music stops. `devices` cycles through the names from that file — the
-ones their owner gave them, untranslated — and `all` means every light it
-lists.
+The pane grows rows when that file names a light: whether the bridge is on,
+which mode, which light to drive, how fast, how far a knob may swing, and
+whether to put it back when the music stops. `devices` cycles through the
+names from that file — the ones their owner gave them, untranslated — and
+`all` means every light it lists.
 
 ### Modes
 
-A strip is not a lamp, and sending it one colour throws away the only thing it
-can do that a bulb cannot.
+A strip is not a lamp, a panel is not a strip, and an effect is not a canvas.
+Each mode is the most that one of those can do.
 
-| Mode | What the strip shows |
+| Mode | What the light shows |
 |---|---|
 | `spectrum` | the bands laid along the strip, low at one end, each lit by how loud it is |
 | `mirror` | the same, folded so the low bands meet in the middle and travel out to both ends |
 | `solid` | one colour for the whole strip, brightness following the mean — what a bulb wants |
+| `params` | the light keeps its own effect, and the spectrum moves that effect's sliders |
+| `bars` | a matrix only: one column per band, standing on the floor, as tall as the band is loud |
+
+On a matrix, `spectrum` and `mirror` run the bands along the WIDTH — one
+column per band, filling the height, brightness following the band. They used
+to send run-length indices over every pixel, which on a panel is a line that
+snakes across the rows: the bands lined up with neither the columns nor the
+height. On a strip they are the same picture one row tall, and `bars` becomes
+`spectrum` there — one row has nowhere to put a height.
+
+**All three painting modes go out over DNRGB on UDP**, strips included. That
+is what removed the freeze. The old strip path wrote run-length indices under
+a frozen segment, and a freeze has to be lifted afterwards or the strip keeps
+the last frame of the music for as long as it stays on — which is what a
+session that died without running its teardown left behind more than once.
+There is no such state now: the packets stop and the light goes back to its
+own effect on the realtime timeout. It also lifts the rate: over HTTP a light
+answered a POST in about 150ms, and a strip of fifty LEDs is one packet, so it
+gets fifty frames a second inside the packet budget instead of `wledRateHz`.
+
+`wledRateHz` still caps `solid`, which is not painting — it writes `fx`, `pal`
+and `col`, and a realtime packet cannot carry those.
+
+**`params` leaves the effect running.** Every other mode takes the strip away
+and paints it; this one asks the light which sliders its current effect has —
+WLED publishes that in `/json/fxdata` — and swings them around the values you
+already tuned. PS Fire declares Speed, Intensity, Flame Height, Wind and
+Spread; the bass moves the first, the treble the last.
+
+Not every slider takes modulation, and the ones that do not repeat across the
+220 effects rather than being particular to any of them: Blur and Fade rate
+jitter into flicker, Speed fights the effect's own clock, Select bin and
+Sensitivity are an audio-reactive effect's own listening controls. Those are
+left alone. About a third of the effects declare nothing else, and there the
+mode falls back to brightness rather than driving them anyway.
+
+An effect with no sliders at all — Solid is one — leaves `params` with nothing
+to move, and it behaves exactly like `solid` does. That is not a fault: set an
+effect on the light first, and the mode has something to work with. The `knob`
+row is the tell; it does not appear when the current effect declares none.
+
+The `knob` row names one slider to drive instead — by the light's own word for
+it, which is what the WLED app shows too. A single named knob hears the whole
+spectrum rather than one band of it. `swing` is how far from your own setting
+a knob may travel, as a percentage of its range; silence gives back exactly
+what you tuned.
+
+**`bars` needs a matrix.** WLED reports one in `/json/info` as `leds.matrix`,
+and on a panel the segment's `stop - start` is the WIDTH, not the pixel count.
+Painted over DNRGB on UDP rather than the JSON API: the same frame as JSON is
+around 4KB that a 32×24 panel answers in 150ms, which caps it at six frames a
+second. The realtime packet carries a timeout, so when the music stops the
+light goes back to its own effect without being told — there is nothing to
+restore. On a strip, and on a panel whose segment does not start at the
+origin, `bars` falls back to `spectrum`.
+
+`bin/omarchy-visualizer-stream` is what speaks DNRGB, and it needs `python3`
+— the only thing in the plugin that does. Without it the painting modes fall
+back to brightness alone; `solid` and `params` are unaffected.
 
 The segment is frozen while the bridge is running. WLED's effect engine owns
 the segment and repaints every LED on its next tick, so individual LEDs
@@ -220,7 +279,11 @@ follow the kick drum alone, which reads as strobing rather than as music.
 **Frames above `wledRateHz` are dropped, never queued.** WLED over HTTP stops
 answering long before a frame rate, and the symptom looks like a broken lamp
 rather than a busy one. A queue would only move the backlog to the end of the
-song.
+song. `bars` is not paced by that setting — it is paced by a packet budget,
+because DNRGB carries 489 pixels and a 768-pixel panel is two packets per
+frame. Measured on one panel, the board is flat to fifty packets a second and
+falls off a cliff past it, and what it drops is what arrived last: the second
+half of every frame, which on a bar chart is the half the bars stand on.
 
 **The lights are put back when the music stops.** Leaving a lamp frozen on some
 colour after you close the player is the worst thing this bridge can do.
@@ -241,9 +304,11 @@ Everything is in the widget's settings screen. The ones worth knowing:
 | `framerate` | 30 | the cost knob |
 | `pauseWhenSilent` · `pauseOnBattery` | on | the two guards |
 | `wledEnabled` | off | mirror onto the lights |
-| `wledRateHz` | 10 | how fast the lamp is asked to follow |
+| `wledRateHz` | 10 | how fast the lamp is asked to follow over HTTP |
 | `wledDevices` | all | narrow the bridge to one light |
-| `wledStyle` | `spectrum` | how the strip is painted |
+| `wledStyle` | `spectrum` | how the light is driven |
+| `wledSpan` | 40 | `params`: how far a knob may swing from your own setting, in percent |
+| `wledKnob` | auto | `params`: name one slider to drive, instead of letting it choose |
 
 ## Development
 
@@ -284,6 +349,8 @@ colour inside its own label:
 | `e` | peak | `t` | wled rate |
 | `w` | wave | `o` | restore on stop |
 | `l` | fall | `a` | bars |
+| | | `x` | knob swing |
+| | | `k` | driven knob |
 
 The last five are only there when the WLED plugin's config names a light, and
 so are their letters: on a machine with no lights `d` does nothing rather than

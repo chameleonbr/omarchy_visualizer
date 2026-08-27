@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "avila.visualizer",
   "name": "Visualizer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Andre Avila",
   "license": "MIT",
   "description": "Audio spectrum in the bar, in four combinable style axes and nine palettes, with the same colours mirrored on your WLED lights.",
@@ -50,7 +50,9 @@
       "wledRateHz": 10,
       "wledDevices": "",
       "wledRestore": true,
-      "wledStyle": "spectrum"
+      "wledStyle": "spectrum",
+      "wledSpan": 40,
+      "wledKnob": ""
     },
     "schema": [
       {
@@ -276,8 +278,22 @@
         "key": "wledStyle",
         "type": "string",
         "label": "WLED mode",
-        "description": "spectrum, mirror or solid.",
+        "description": "spectrum, mirror, solid, params to move the light's own effect sliders, or bars for a matrix panel.",
         "defaultValue": "spectrum"
+      },
+      {
+        "key": "wledKnob",
+        "type": "string",
+        "label": "WLED driven knob",
+        "description": "Which slider of the light's own effect the spectrum moves, by the name the light gives it. Empty picks automatically.",
+        "defaultValue": ""
+      },
+      {
+        "key": "wledSpan",
+        "type": "number",
+        "label": "WLED knob swing",
+        "description": "How far params mode may move a slider from the light's own setting, in percent. 0..100.",
+        "defaultValue": 40
       },
       {
         "key": "wledRateHz",

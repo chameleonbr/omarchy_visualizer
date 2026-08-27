@@ -194,6 +194,50 @@ function isMixMonitor(name) {
 // they name in their own arguments, which is exactly this plugin's three and
 // nothing else. Tracking ids instead would lose them the moment the shell
 // crashes; the arguments survive that, so this also cleans up after one.
+// The plugin's own loopbacks are not somebody playing music.
+//
+// `input: both` loads a null sink and two loopbacks into the graph, and the
+// loopbacks are streams on the sink side — which is exactly what `playing`
+// looks for. So the plugin created the evidence that convinced it something
+// was playing, `pauseWhenSilent` never fired once, and cava ran for the life
+// of the session. It could not have fired: the condition became true the
+// moment the plugin acted on it.
+//
+// pipewire names the sink each loopback feeds in `target.object`, which is
+// this plugin's own sink and needs nothing added to the module load to see.
+function isOwnMixNode(properties, name) {
+  var props = properties || {}
+  if (String(props["target.object"] || "") === MIX_SINK) return true
+  return String(name || "") === MIX_SINK
+}
+
+function isPlaying(nodes) {
+  var list = nodes || []
+  for (var i = 0; i < list.length; i++) {
+    var node = list[i]
+    // An application playing audio shows up as a stream on the sink side.
+    if (!node || !node.isStream || !node.isSink) continue
+    if (isOwnMixNode(node.properties, node.name)) continue
+    return true
+  }
+  return false
+}
+
+// Silence is not a picture. Nothing in a frame of zeroes differs from the
+// frame of zeroes before it, so assigning it changes a property, re-evaluates
+// every binding under it and repaints every bar on every monitor to draw the
+// same nothing.
+//
+// This is not the floor's job and does not replace it: the floor decides what
+// counts as quiet, this decides that quiet twice running is not news.
+function isSilentFrame(frame) {
+  var list = frame || []
+  for (var i = 0; i < list.length; i++) {
+    if ((Number(list[i]) || 0) > 0) return false
+  }
+  return true
+}
+
 function mixTeardownCommand() {
   return ["sh", "-c",
     "pactl list short modules"
@@ -513,7 +557,9 @@ var DEFAULTS = {
   wledStyle: "spectrum",
   wledRateHz: 10,
   wledDevices: "",
-  wledRestore: true
+  wledRestore: true,
+  wledSpan: 40,
+  wledKnob: ""
 }
 
 // Later sources win, and an absent key never overrides a present one — a file
@@ -604,6 +650,55 @@ function barGeometry(base, value, height, minHeight, dpr) {
   }
 
   return { y: full - length, height: length }
+}
+
+// ------------------------------------------------------------- segments
+//
+// The segmented cap draws a column of fixed blocks rather than one bar, so it
+// cannot use `barGeometry` — nothing about it varies with the value except how
+// many blocks are lit. It still has to obey `base`, which it did not: the
+// blocks were always counted up from the floor, so `top` and `mirror` looked
+// like settings that did nothing at all while every other cap honoured them.
+//
+// `mirror` needs twice the blocks — one column each side of the centre line —
+// so the count is asked for separately rather than assumed to be `segments`.
+
+function segmentCount(base, segments) {
+  var count = Math.max(1, Math.floor(Number(segments) || 1))
+  return base === "mirror" ? count * 2 : count
+}
+
+// How tall the drawing area is for ONE column of blocks. Mirror splits the
+// height between two, so its blocks are half as tall and the pair of them
+// still fills the widget.
+function segmentSpan(base, height) {
+  var full = Math.max(0, Number(height) || 0)
+  return base === "mirror" ? full / 2 : full
+}
+
+// Where block `index` sits, and which step of the meter it is — the two are
+// the same number everywhere except `mirror`, where the second half counts
+// from the centre again going the other way.
+//
+// The pinned edge is the base edge, as everywhere else here: `bottom` grows
+// off the floor, `top` off the ceiling, `mirror` off the middle. Deriving the
+// position from the step rather than stacking is what keeps a block on the
+// same pixel whatever its neighbours do.
+function segmentGeometry(base, index, segments, unit, gap, height) {
+  var per = Math.max(1, Math.floor(Number(segments) || 1))
+  var step = base === "mirror" ? index % per : index
+  var offset = step * (unit + gap)
+
+  if (base === "top") return { y: offset, step: step }
+
+  if (base === "mirror") {
+    var middle = Math.max(0, Number(height) || 0) / 2
+    return index < per
+      ? { y: middle - unit - offset, step: step }
+      : { y: middle + offset, step: step }
+  }
+
+  return { y: Math.max(0, Number(height) || 0) - unit - offset, step: step }
 }
 
 // --------------------------------------------------------------- radial
@@ -910,10 +1005,14 @@ function toBytes(color) {
 // back to solid without lifting that would leave the strip stuck on whichever
 // spectrum frame happened to be the last one.
 function wledPayload(brightness, color) {
+  // fx and pal go with the colour or the colour is decoration: an unfrozen
+  // segment still running its own effect repaints every LED on the next tick,
+  // and any palette but Default ignores col[0] outright. The live payload can
+  // leave both alone because it freezes the segment; this one cannot.
   return JSON.stringify({
     on: true,
     bri: brightness,
-    seg: [{ id: 0, frz: false, col: [toBytes(color)] }]
+    seg: [{ id: 0, frz: false, fx: 0, pal: 0, col: [toBytes(color)] }]
   })
 }
 
@@ -923,7 +1022,7 @@ function wledPayload(brightness, color) {
 // can do that a bulb cannot: show the spectrum as a spectrum, low bands at one
 // end and high at the other, each one lit by how loud it actually is.
 
-var WLED_STYLES = ["spectrum", "mirror", "solid"]
+var WLED_STYLES = ["spectrum", "mirror", "solid", "params", "bars"]
 
 // Colour never falls all the way to black. A band at rest that goes dark takes
 // its stretch of the strip out of the picture entirely, and the strip stops
@@ -954,67 +1053,56 @@ function wledBandAt(led, ledCount, bands, style) {
   return clamp(Math.floor(led / count * bands), 0, bands - 1)
 }
 
-// WLED's range form: `[start, stop, "RRGGBB", start, stop, "RRGGBB", …]`, stop
-// exclusive. Runs rather than one colour per LED because this goes out ten
-// times a second over HTTP to a device with a few hundred kilobytes of RAM:
-// fourteen triplets is a payload it can read, three hundred hex strings is one
-// it drops.
-function wledRuns(frame, palette, ctx, ledCount, style) {
-  var count = Math.floor(Number(ledCount) || 0)
-  var bands = frame ? frame.length : 0
-  if (!bands || count < 1) return []
+// The strip used to be painted here too, with run-length `seg.i` indices under
+// a frozen segment. It is streamed like the panel now: one paint path, and no
+// freeze to lift afterwards. A frozen segment that is never unfrozen keeps the
+// last frame of the music for as long as the light stays on, which is what a
+// session that died without running its teardown left behind more than once.
 
-  var runs = []
-  var start = 0
-  var current = ""
-
-  for (var led = 0; led < count; led++) {
-    var band = wledBandAt(led, count, bands, style)
-    var value = clamp(Number(frame[band]) || 0, 0, FRAME_MAX)
-    var color = paletteColor(palette, band, bands, value, ctx)
-    var lit = dim(color, WLED_FLOOR + (1 - WLED_FLOOR) * (value / FRAME_MAX))
-    var hex = wledHex(lit)
-
-    if (hex !== current) {
-      if (current !== "") runs.push(start, led, current)
-      start = led
-      current = hex
-    }
-  }
-  if (current !== "") runs.push(start, count, current)
-  return runs
-}
-
-// `frz: true` is the whole trick, and the reason a first attempt at this drew
-// nothing but one colour. WLED's effect engine owns the segment: it repaints
-// every LED on its next tick, so individual LEDs written underneath it survive
-// for a few milliseconds and are then painted over with the effect's own
-// colour. Freezing the segment stops that loop and leaves the LEDs as written.
-//
-// Not `fx: 0`. Setting the effect to Solid also stops the pattern, but Solid
-// is an effect like any other — it fills the segment with the primary colour,
-// so it overwrites the spectrum just as surely — and it would quietly replace
-// whatever effect the strip was set to, which is not this bridge's to change.
-function wledLivePayload(brightness, runs) {
-  return JSON.stringify({
-    on: true,
-    bri: brightness,
-    seg: [{ id: 0, frz: true, i: runs }]
-  })
-}
 
 // The strip has to say how long it is before it can be painted band by band.
 // One process for every device, because a light that does not answer must not
 // stop the others being asked.
-function wledInfoCommand(hosts) {
+// One probe, one line per host, and the hosts arrive as arguments rather than
+// spliced into the script: a device name comes out of someone else's config
+// file and is not this plugin's to trust.
+//
+// Retried, because the board truncates. Asked for `/json/fxdata` twelve times
+// this light returned 9205 bytes ten times and 5514 twice — the same answer,
+// cut off mid-array. Half a JSON document does not parse, and the effect's
+// slider layout is asked for once per effect change, so one short answer left
+// `params` with no knobs and nothing to say about it until the effect changed
+// again. `/json/si` is a quarter of the size and never came back short.
+//
+// The last character is the test: a complete document ends with its own
+// closer, and a truncated one does not. It is not a validator and does not
+// need to be — the parse is still the thing that decides, this only stops the
+// probe from settling for an answer that visibly did not finish.
+var WLED_PROBE_TRIES = 4
+
+function wledProbeCommand(hosts, path, closer) {
   return ["sh", "-c",
     'for h in "$@"; do ' +
-    '  printf "%s\t" "$h"; ' +
-    '  curl -s -m 2 "http://$h/json/info" | tr -d "\r\n"; ' +
-    '  printf "\n"; ' +
+    '  i=0; body=""; ' +
+    '  while [ $i -lt ' + WLED_PROBE_TRIES + ' ]; do ' +
+    '    body=$(curl -s -m 3 "http://$h' + path + '" | tr -d "\r\n"); ' +
+    '    case "$body" in *"' + closer + '") break ;; esac; ' +
+    '    i=$((i+1)); ' +
+    '  done; ' +
+    '  printf "%s\t%s\n" "$h" "$body"; ' +
     'done',
     "omarchy-visualizer"].concat(hosts || [])
 }
+
+// /json/si is state and info in one request, around 2KB. It carries both
+// things the bridge needs — how long the strip is, and what segment 0 is
+// currently set to — where /json/info carried only the first.
+function wledInfoCommand(hosts) { return wledProbeCommand(hosts, "/json/si", "}") }
+
+// The slider layout of every effect the firmware has, which depends on the
+// firmware and the board. Asked once per host and only for `params`: it is
+// around 15KB, where every other probe here is measured in hundreds of bytes.
+function wledFxDataCommand(hosts) { return wledProbeCommand(hosts, "/json/fxdata", "]") }
 
 function parseWledInfo(line) {
   var at = String(line || "").indexOf("\t")
@@ -1030,23 +1118,447 @@ function parseWledInfo(line) {
     return null
   }
 
-  var count = parsed && parsed.leds ? Number(parsed.leds.count) : 0
+  var info = parsed && parsed.info ? parsed.info : null
+  var count = info && info.leds ? Number(info.leds.count) : 0
   if (!count || count < 1) return null
-  return { host: host, count: Math.floor(count) }
+
+  var segments = parsed.state && parsed.state.seg ? parsed.state.seg : []
+  var seg = segments.length > 0 ? segments[0] : null
+  var shape = wledSegmentShape(seg, info, count)
+  if (!shape) return null
+
+  var fx = seg ? Number(seg.fx) : NaN
+  return {
+    host: host,
+    count: shape.width * shape.height,
+    width: shape.width,
+    height: shape.height,
+    matrix: shape.height > 1,
+    fx: isFinite(fx) ? Math.floor(fx) : -1,
+    seg: seg || {},
+    baseline: wledBaseline(parsed.state)
+  }
+}
+
+// A strip is not a matrix, and the difference is not cosmetic: the pixel a
+// paint index lands on is derived from it.
+//
+// Segment 0 is what every style here writes to, and the segment bounds the
+// paint — `i` indices are relative to it and WLED drops the ones past its end.
+// On a strip that bound is `stop - start`. On a matrix `stop`/`start` are the
+// COLUMNS and `stopY`/`startY` the rows, so the same subtraction gives the
+// width and nothing else: a 32x24 panel reported 32, and every band but the
+// first fell off the end. `info.leds.count` is no better — that light counts
+// 1344 LEDs behind a 768-pixel panel.
+function wledSegmentShape(seg, info, count) {
+  var matrix = info && info.leds ? info.leds.matrix : null
+  var width = seg ? Number(seg.stop) - Number(seg.start) : NaN
+  if (!isFinite(width) || width < 1) width = count
+
+  var height = 1
+  if (matrix && Number(matrix.h) > 1) {
+    var rows = seg ? Number(seg.stopY) - Number(seg.startY) : NaN
+    height = isFinite(rows) && rows >= 1 ? rows : Math.floor(Number(matrix.h))
+    width = Math.min(width, Math.floor(Number(matrix.w)) || width)
+  } else {
+    // No panel behind it, so the strip is the only other ceiling there is.
+    width = Math.min(width, count)
+  }
+  if (width < 1 || height < 1) return null
+  return { width: Math.floor(width), height: Math.floor(height) }
+}
+
+// The whole effect table comes back; only the entry for the effect that host
+// is actually running is kept. Holding 220 strings per light so the bridge can
+// read one of them is not a cache, it is a leak with a lookup on it.
+function parseWledFxData(line, effectByHost) {
+  var at = String(line || "").indexOf("\t")
+  if (at < 0) return null
+  var host = line.slice(0, at)
+  var body = line.slice(at + 1)
+  if (!host || !body) return null
+
+  var parsed
+  try {
+    parsed = JSON.parse(body)
+  } catch (error) {
+    return null
+  }
+  if (!Array.isArray(parsed)) return null
+
+  var fx = Number((effectByHost || {})[host])
+  if (!isFinite(fx) || fx < 0 || fx >= parsed.length) return null
+  return { host: host, meta: String(parsed[fx]) }
 }
 
 // Leaving a lamp frozen on a colour after the music stops is the worst thing
 // this bridge can do, so the restore is explicit and idempotent.
+// ------------------------------------------------------------------ params
+//
+// The other styles take the strip away from the light and paint it. This one
+// leaves the light's own effect running and moves its knobs instead, which is
+// the only style that keeps whatever the strip was already good at.
+//
+// WLED describes each effect's sliders in `/json/fxdata`: one string per
+// effect whose first field is a comma-separated list of labels, positionally
+// mapped onto these five keys. An empty label — or "!" — means the effect does
+// not use that slider at all.
+var WLED_SLIDERS = [
+  { key: "sx", max: 255 },
+  { key: "ix", max: 255 },
+  { key: "c1", max: 255 },
+  { key: "c2", max: 255 },
+  { key: "c3", max: 31 }
+]
+
+// Which kinds of knob do not take modulation. Not a list of effects — there
+// are 220 of those and their slider labels barely repeat — but the few label
+// families that repeat across all of them:
+//
+//   blur/fade/trail  decay knobs. Jittering them reads as flicker, not motion.
+//   speed            the effect owns its own clock; fighting it looks broken.
+//   bin/sensitivity  an audio-reactive effect's own listening controls, which
+//                    this bridge would be fighting for the same signal.
+//   colour           the palette's job, and the palette is a setting here.
+//   select/id/font   a slider that picks rather than scales: it jumps.
+var WLED_BLOCKED_KNOBS = [
+  "blur", "fade", "trail", "decay", "smooth", "speed",
+  "bin", "sensitivity", "volume", "sound effect", "pre-amp",
+  "color", "colour", "hue", "saturation", "palette",
+  "font", "rotate", "flip", "id", "select"
+]
+
+function wledKnobModulatable(label) {
+  var low = String(label || "").toLowerCase()
+  for (var i = 0; i < WLED_BLOCKED_KNOBS.length; i++) {
+    if (low.indexOf(WLED_BLOCKED_KNOBS[i]) >= 0) return false
+  }
+  return true
+}
+
+// The sliders one effect declares, with the value the light already had on
+// each. `meta` is that effect's entry in /json/fxdata; `seg` is segment 0 as
+// /json/si reported it.
+function wledDeclaredKnobs(meta, seg) {
+  var labels = String(meta || "").split(";")[0].split(",")
+  var source = seg || {}
+  var out = []
+  for (var i = 0; i < WLED_SLIDERS.length; i++) {
+    var label = String(labels[i] === undefined ? "" : labels[i]).replace(/^\s+|\s+$/g, "")
+    if (!label || label === "!") continue
+    var slider = WLED_SLIDERS[i]
+    var base = Number(source[slider.key])
+    out.push({
+      key: slider.key,
+      max: slider.max,
+      label: label,
+      base: clamp(isFinite(base) ? Math.round(base) : Math.round(slider.max / 2), 0, slider.max)
+    })
+  }
+  return out
+}
+
+// Empty is a real answer, not a failure: an effect whose only knobs are Fade
+// rate and Blur has nothing the audio can move without making it look broken,
+// and roughly a third of WLED's effects are exactly that. The caller falls
+// back to the one-colour payload rather than driving them anyway.
+function wledPickKnobs(knobs) {
+  var out = []
+  for (var i = 0; i < (knobs || []).length; i++) {
+    if (wledKnobModulatable(knobs[i].label)) out.push(knobs[i])
+  }
+  return out
+}
+
+// What the spectrum actually drives: the one knob that was asked for, or the
+// blocklist's guess when nothing was.
+//
+// Named by LABEL rather than by key, because the label is the only part of a
+// slider that means anything — `c1` is "Flame Height" on PS Fire, "Low bin" on
+// Freqwave and "Arms" on PS Vortex. It is also what the light itself calls it,
+// so the pane can offer the same words the WLED app does.
+//
+// A label that no longer exists is not an error: the effect on the light was
+// changed and this one has different knobs. Falling back to the guess beats
+// driving nothing and beats guessing which of the new ones was meant.
+function wledDriveKnobs(declared, wanted) {
+  var name = String(wanted || "")
+  if (name) {
+    for (var i = 0; i < (declared || []).length; i++) {
+      if (declared[i].label === name) return [declared[i]]
+    }
+  }
+  return wledPickKnobs(declared)
+}
+
+function wledKnobLabels(declared) {
+  var out = []
+  for (var i = 0; i < (declared || []).length; i++) out.push(declared[i].label)
+  return out
+}
+
+// Offered only when a light has said what its effect has. Before that answer —
+// and on an effect with no sliders at all — there is nothing to choose between,
+// and a row of one option teaches people the control is decoration.
+function wledKnobRows(labels) {
+  if (!labels || labels.length === 0) return []
+  return [{ key: "wledKnob", accel: "k", values: [""].concat(labels) }]
+}
+
+// Each knob gets its own slice of the spectrum, low bands first, so the knobs
+// move independently. One number driving all of them is what the brightness
+// already does, and it makes the whole effect pulse in phase.
+function wledKnobLevel(frame, index, count) {
+  var bands = (frame || []).length
+  if (!bands || count < 1) return 0
+  var from = Math.floor(index * bands / count)
+  var to = Math.max(from + 1, Math.floor((index + 1) * bands / count))
+  var total = 0
+  for (var i = from; i < to && i < bands; i++) {
+    total += clamp(Number(frame[i]) || 0, 0, FRAME_MAX)
+  }
+  return clamp(total / (to - from) / FRAME_MAX, 0, 1)
+}
+
+// Around the value the light already had rather than across the whole range:
+// silence has to give back exactly what the user tuned, or the bridge is not
+// modulating the effect so much as replacing it. Bipolar for the same reason —
+// a knob that only ever rises has its floor at the user's setting and spends
+// the quiet half of the song pinned there.
+function wledParamsPayload(knobs, frame, span) {
+  var seg = { id: 0 }
+  var reach = clamp(Number(span), 0, 1)
+  for (var i = 0; i < knobs.length; i++) {
+    var knob = knobs[i]
+    var swing = (wledKnobLevel(frame, i, knobs.length) * 2 - 1) * reach * knob.max
+    seg[knob.key] = Math.round(clamp(knob.base + swing, 0, knob.max))
+  }
+  // No frz, no fx, no col: the effect is the point of this style, and the
+  // segment has to keep running for the knobs to mean anything.
+  return JSON.stringify({ on: true, seg: [seg] })
+}
+
+// -------------------------------------------------------------------- bars
+//
+// The one picture a panel can draw that a strip cannot: a column per band,
+// lit from the floor to however loud that band is. A strip has to spend its
+// whole length on the spectrum's width and has nothing left for its height.
+//
+// It goes out over DNRGB rather than the JSON API. Measured on a 32x24 panel,
+// the same frame as `seg.i` is around 4KB of JSON that the light answers in
+// 150ms — six frames a second, for something whose whole job is to keep up
+// with music. It is also what makes the restore disappear: a realtime packet
+// carries a timeout, so when the frames stop the light goes back to its own
+// effect without being told.
+
+// Whether a light can be streamed at all.
+//
+// A strip always can: DNRGB indexes LEDs in order, so the segment's own start
+// is just the index the frame is written at. A panel can only from the origin
+// — which LED a panel pixel lands on is the light's own ledmap, unknowable
+// from here, and a segment starting anywhere else would be painted through a
+// mapping this plugin invented, which is a picture of nothing.
+function wledCanStream(shape, seg) {
+  if (!shape) return false
+  var start = Math.max(0, Math.floor(Number((seg || {}).start) || 0))
+  if (!shape.matrix) return true
+  var startY = Number((seg || {}).startY) || 0
+  return start === 0 && startY === 0
+}
+
+// Where in the strip the frame is written. Zero for a panel, which is the only
+// place it is allowed to be.
+function wledStreamStart(shape, seg) {
+  if (!shape || shape.matrix) return 0
+  return Math.max(0, Math.floor(Number((seg || {}).start) || 0))
+}
+
+// Row-major, y=0 at the top, which is how WLED indexes a panel and therefore
+// which pixel each byte lands on. The bars grow from the bottom, so the row a
+// pixel is in is counted from the far end.
+// The three styles a panel can draw, and the only difference between them is
+// what a column does with its band's value:
+//
+//   bars       height. The one picture a strip cannot draw at all.
+//   spectrum   brightness, over the full height — the strip's own style, with
+//              the bands running along the width instead of along the wire.
+//   mirror     the same, folded, so the low bands meet in the middle.
+//
+// `spectrum` and `mirror` used to go out as run-length indices over all 768
+// pixels, which is a line that snakes across the rows: the bands did not line
+// up with the columns and nothing lined up with the height. They were on the
+// JSON path too, so they moved at `wledRateHz`. Both were the same mistake —
+// treating a rectangle as a long strip.
+var WLED_PANEL_STYLES = ["bars", "spectrum", "mirror"]
+
+function isWledPanelStyle(style) {
+  return WLED_PANEL_STYLES.indexOf(String(style || "")) >= 0
+}
+
+function wledPanelFrame(frame, palette, ctx, width, height, fill, style) {
+  var bands = (frame || []).length
+  var cols = Math.floor(width) || 0
+  var rows = Math.floor(height) || 0
+  if (!bands || cols < 1 || rows < 1) return ""
+
+  // The same two ends the screen paints each bar between, run up the column
+  // instead of up the bar. A panel bar has a height, so it can show the whole
+  // gradient rather than one colour off it — which is the point: the strip is
+  // meant to be the picture on screen, in the room.
+  //
+  // Per column rather than per pixel: every pixel in a column shares one band,
+  // one pair and one height, and working those out once each is the difference
+  // between 32 palette lookups a frame and 768.
+  // A strip is one row: there is no second direction to put a height in, so
+  // `bars` is `spectrum` there rather than a row of blocks that are either on
+  // or off. On a panel the height is the whole point.
+  var standing = style === "bars" && rows > 1
+
+  var tops = []
+  var pairs = []
+  var flats = []
+  var lit = false
+  for (var x = 0; x < cols; x++) {
+    // The same fold the strip uses, over the width instead of over the wire:
+    // one band per column, and `mirror` puts the low bands in the middle.
+    var band = wledBandAt(x, cols, bands, style === "mirror" ? "mirror" : "spectrum")
+    var value = clamp(Number(frame[band]) || 0, 0, FRAME_MAX)
+
+    // A full column carries its value in brightness, so it is lit whenever the
+    // strip version would be — down to the floor, never to black, or a quiet
+    // band takes its stretch of the panel out of the picture entirely.
+    var top = standing ? Math.round(value / FRAME_MAX * rows) : rows
+    if (top > 0) lit = true
+    tops.push(top)
+
+    if (standing) {
+      // Exactly the branch Spectrum.qml takes: `solid` is one colour up the
+      // whole bar, and only the gradient fills get two ends. Taking the pair
+      // in both cases would give `solid` a gradient the screen never draws,
+      // which is the same mismatch this is here to remove.
+      pairs.push(fill === "solid"
+        ? null : barGradientPair(palette, band, bands, value, ctx, fill))
+      flats.push(wledHex(paletteColor(palette, band, bands, value, ctx)))
+      continue
+    }
+
+    pairs.push(null)
+    flats.push(wledHex(dim(paletteColor(palette, band, bands, value, ctx),
+      WLED_FLOOR + (1 - WLED_FLOOR) * (value / FRAME_MAX))))
+  }
+
+  // A frame with nothing in it is not a frame of black — it is no frame. A
+  // realtime packet holds the light in realtime for as long as they keep
+  // coming, so streaming silence pins a dark panel instead of handing it back.
+  // Sending nothing lets the timeout do what it is there for.
+  if (!lit) return ""
+
+  var out = ""
+  for (var y = 0; y < rows; y++) {
+    var fromBottom = rows - 1 - y
+    for (var col = 0; col < cols; col++) {
+      var top = tops[col]
+      if (top <= fromBottom) { out += "000000"; continue }
+      var pair = pairs[col]
+      if (!pair) { out += flats[col]; continue }
+      // The tip is the top of THIS bar, not the top of the panel: a quiet band
+      // that only reaches two pixels still shows both ends of its gradient,
+      // the same way a short bar on screen does.
+      out += wledHex(top < 2 ? pair.tip : mix(pair.base, pair.tip, fromBottom / (top - 1)))
+    }
+  }
+  return out
+}
+
+// What the bridge is allowed to send is measured in PACKETS a second, not
+// frames a second, and the budget is the board's, not the picture's.
+//
+// DNRGB carries 489 pixels, so a 768-pixel panel is two packets per frame and
+// a strip of fifty is one. Sweeping one panel from 10 to 40 frames a second
+// and watching how long it took to answer an unrelated HTTP request:
+//
+//     10 fps   20 packets/s    103 ms
+//     15 fps   30 packets/s     73 ms
+//     20 fps   40 packets/s     66 ms
+//     25 fps   50 packets/s     68 ms
+//     30 fps   60 packets/s    199 ms
+//     40 fps   80 packets/s   1663 ms, and a quarter of them never answered
+//
+// Flat to 50 and then a cliff. Past it the board is behind on its receive
+// queue, and what it drops is what arrived last — the second packet of each
+// frame, which on a bar chart is the half the bars stand on. That is what "the
+// panel is a second behind" was.
+//
+// `info.leds.fps` looks like the number to use and is not: it reports 30 under
+// one effect and 70 under another, and under realtime it just echoes whatever
+// it is being fed, so pacing on it is a loop measuring itself.
+//
+// ponytail: one budget for every board. An ESP8266 is slower than an ESP32 and
+// would want its own; the upgrade is to find the knee per host by watching how
+// long that light takes to answer, which is what the table above did by hand.
+var WLED_PACKET_BUDGET = 50
+var WLED_PACKET_PIXELS = 489
+
+function wledStreamPackets(pixels) {
+  return Math.max(1, Math.ceil((Number(pixels) || 0) / WLED_PACKET_PIXELS))
+}
+
+function wledStreamFps(pixels) {
+  return WLED_PACKET_BUDGET / wledStreamPackets(pixels)
+}
+
+function wledStreamDue(lastSentMs, nowMs, pixels) {
+  return (nowMs - lastSentMs) >= (1000 / wledStreamFps(pixels))
+}
+
+// One line per frame, and the host travels as data on that line rather than
+// in the command: it comes out of another plugin's config file and is not
+// this one's to trust.
+function wledStreamLine(host, start, hex) {
+  return String(host) + "\t" + (Math.max(0, Math.floor(Number(start) || 0)))
+    + "\t" + String(hex) + "\n"
+}
+
+// What `params` sends when the effect on the light has no knob worth driving.
+// It must not be the one-colour payload: that carries fx 0 and would replace
+// the effect it was asked to leave running, which turns "this effect has
+// nothing to modulate" into "this effect is gone".
+function wledBrightnessPayload(brightness) {
+  return JSON.stringify({ on: true, bri: brightness })
+}
+
+// What has to be put back before the bridge writes over it. Every style here
+// takes something: `solid` overwrites the effect and the palette, `spectrum`
+// and `mirror` freeze the segment and paint it, `params` moves the sliders.
+// None of that is the plugin's to keep. A visualiser that leaves the strip on
+// Solid white after a song has not borrowed the light, it has taken it.
+var WLED_RESTORED = ["fx", "pal", "sx", "ix", "c1", "c2", "c3", "o1", "o2", "o3"]
+
+function wledBaseline(state) {
+  var segments = (state && state.seg) || []
+  if (segments.length === 0) return null
+  var seg = segments[0] || {}
+  var out = { id: 0, frz: false }
+  for (var i = 0; i < WLED_RESTORED.length; i++) {
+    var key = WLED_RESTORED[i]
+    if (seg[key] !== undefined) out[key] = seg[key]
+  }
+  if (Array.isArray(seg.col)) out.col = seg.col
+  return { on: state.on !== false, bri: Number(state.bri), seg: out }
+}
+
+// The freeze has to be lifted whatever else happens, or the strip keeps the
+// last frame of the spectrum for as long as it stays on and its own effects
+// never run again. Beyond that: what was recorded, or — with nothing recorded
+// — off, which is the only honest answer when the plugin never learned what
+// the light was doing before it started.
 function wledRestorePayload(previous) {
-  // The freeze has to be lifted whatever else happens, or the strip keeps the
-  // last frame of the spectrum for as long as it stays on and its own effects
-  // never run again.
-  if (!previous) return JSON.stringify({ on: false, seg: [{ id: 0, frz: false }] })
-  return JSON.stringify({
-    on: previous.on !== false,
-    bri: Number(previous.bri) || 128,
-    seg: previous.seg || []
-  })
+  if (!previous || !previous.seg) {
+    return JSON.stringify({ on: false, seg: [{ id: 0, frz: false }] })
+  }
+  var out = { on: previous.on !== false, seg: [previous.seg] }
+  if (isFinite(previous.bri) && previous.bri > 0) out.bri = Math.round(previous.bri)
+  return JSON.stringify(out)
 }
 
 // ------------------------------------------------------------- the rows
@@ -1092,6 +1604,11 @@ var WLED_ROWS = [
   // has, and "" is all of them.
   { key: "wledDevices", accel: "v", values: [""] },
   { key: "wledRateHz", accel: "t", values: [5, 10, 15, 20] },
+  // How far `params` may swing a knob from where the light already had it,
+  // as a percentage of that knob's own range. Only that style reads it, but
+  // it stays on screen either way: a row that comes and goes with a sibling
+  // setting is a row nobody can find twice.
+  { key: "wledSpan", accel: "x", values: [20, 40, 60, 80] },
   { key: "wledRestore", accel: "o", values: [false, true] }
 ]
 

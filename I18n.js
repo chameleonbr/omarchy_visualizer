@@ -59,6 +59,8 @@ var STRINGS = {
     "row.wledStyle": "wled mode",
     "row.wledDevices": "devices",
     "row.wledRateHz": "wled rate",
+    "row.wledSpan": "knob swing",
+    "row.wledKnob": "driven knob",
     "row.wledRestore": "restore on stop",
 
     // The empty device setting is every light the config lists, so it says so
@@ -70,9 +72,15 @@ var STRINGS = {
 
     "wledDevices.": "all",
 
+    // Empty means the blocklist's guess. A named knob shows as the light's
+    // own word for it, which is what the WLED app calls it too.
+    "wledKnob.": "auto",
+
     "wledStyle.spectrum": "spectrum",
     "wledStyle.mirror": "mirror",
     "wledStyle.solid": "solid",
+    "wledStyle.params": "effect knobs",
+    "wledStyle.bars": "panel bars",
     "row.gradientFrom": "gradient from",
     "row.gradientTo": "gradient to",
     "row.solidColor": "colour",
@@ -146,15 +154,21 @@ var STRINGS = {
     "row.wledStyle": "modo wled",
     "row.wledDevices": "dispositivos",
     "row.wledRateHz": "taxa wled",
+    "row.wledSpan": "amplitude",
+    "row.wledKnob": "knob usado",
     "row.wledRestore": "restaurar ao parar",
 
     "micDevice.": "sistema",
 
     "wledDevices.": "todos",
 
+    "wledKnob.": "auto",
+
     "wledStyle.spectrum": "espectro",
     "wledStyle.mirror": "espelho",
     "wledStyle.solid": "sólido",
+    "wledStyle.params": "efeito",
+    "wledStyle.bars": "barras no painel",
     "row.gradientFrom": "gradiente de",
     "row.gradientTo": "gradiente até",
     "row.solidColor": "cor",

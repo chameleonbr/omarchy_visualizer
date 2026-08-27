@@ -32,6 +32,8 @@ Item {
   property int wledRateHz: 10
   property string wledDevices: ""
   property bool wledRestore: true
+  property int wledSpan: 40
+  property string wledKnob: ""
 
   // ------------------------------------------------------------ language
   //
@@ -126,6 +128,8 @@ Item {
     wledRateHz = Math.max(1, Math.min(20, Number(settings.wledRateHz) || 10))
     wledDevices = String(settings.wledDevices || "")
     wledRestore = settings.wledRestore !== false
+    wledSpan = Math.max(0, Math.min(100, Number(settings.wledSpan) || 0))
+    wledKnob = String(settings.wledKnob || "")
 
     if (restart) writeConfig()
   }
@@ -140,14 +144,8 @@ Item {
   property int installed: -1
   property int visibleWidgets: 0
 
-  readonly property bool playing: {
-    var nodes = Pipewire.nodes ? Pipewire.nodes.values : []
-    for (var i = 0; i < nodes.length; i++) {
-      // An application playing audio shows up as a stream on the sink side.
-      if (nodes[i] && nodes[i].isStream && nodes[i].isSink) return true
-    }
-    return false
-  }
+  readonly property bool playing:
+    Vis.isPlaying(Pipewire.nodes ? Pipewire.nodes.values : [])
 
   readonly property var guardState: ({
     installed: installed === 1,
@@ -247,10 +245,19 @@ Item {
         if (Vis.isWarmup(root.frameNumber)) return
 
         var floored = Vis.applyFloor(next, root.floorLevel)
-        root.frame = Vis.smoothFrame(root.frame, floored, root.smoothing)
+        var smoothed = Vis.smoothFrame(root.frame, floored, root.smoothing)
         // Peaks track the smoothed frame, not the raw one: a marker that
         // chased every spike would never sit still long enough to read.
-        root.peaks = Vis.updatePeaks(root.peaks, root.frame, root.peakFall)
+        var settled = Vis.updatePeaks(root.peaks, smoothed, root.peakFall)
+
+        // Silence over silence is not a new frame. The transition into it
+        // still is — all four have to be quiet, or the bars would freeze
+        // halfway down and the peaks would hang where they were.
+        if (Vis.isSilentFrame(smoothed) && Vis.isSilentFrame(root.frame)
+          && Vis.isSilentFrame(settled) && Vis.isSilentFrame(root.peaks)) return
+
+        root.frame = smoothed
+        root.peaks = settled
         root.pushToWled()
       }
     }
@@ -471,19 +478,67 @@ Item {
 
   property string wledStyle: "spectrum"
 
-  // How long each strip is, by host. A strip cannot be painted band by band
-  // until it has said, and it is asked once per set of hosts rather than per
-  // frame — the answer does not change while the lights are on.
-  property var wledLedCounts: ({})
+  // Which effect each host is running, and the knobs that effect declares
+  // with the values the light had when it started running it. Only `params`
+  // fills these; the other styles never look at them.
+  property var wledEffects: ({})
+  // Everything the effect declares, and the subset the spectrum drives. Both,
+  // because the pane offers the first and only the second is sent.
+  property var wledDeclared: ({})
+  property var wledKnobs: ({})
+
+  // The names the pane puts in the `wledKnob` row. One light's worth: with two
+  // panels running different effects there is no single answer, and the first
+  // is a better guess than a union nobody's light actually has.
+  readonly property var wledKnobLabels: {
+    for (var host in wledDeclared) return Vis.wledKnobLabels(wledDeclared[host])
+    return []
+  }
+
+  // The choice can change without the effect changing, so the drive list is
+  // rebuilt from what is already known rather than waiting for another probe.
+  onWledKnobChanged: {
+    var next = {}
+    for (var host in wledDeclared) {
+      next[host] = Vis.wledDriveKnobs(wledDeclared[host], wledKnob)
+    }
+    wledKnobs = next
+  }
+
+  // What each light is: a strip, or a panel and how big. `bars` is the only
+  // style that needs it, and it is the only style a strip cannot have.
+  property var wledShapes: ({})
+
+  // What segment 0 was doing before this plugin touched it, by host. Nothing
+  // binds to it, so it is mutated rather than replaced.
+  property var wledBaselines: ({})
 
   onWledHostsChanged: askWledSizes()
   onWledEnabledChanged: if (wledEnabled) askWledSizes()
+  // Leaving `params` has to put the knobs back before the next style starts
+  // writing over the same segment, and it invalidates the baseline: coming
+  // back re-probes rather than swinging around numbers from a previous song.
+  onWledStyleChanged: {
+    restoreWled()
+    askWledSizes()
+  }
 
   function askWledSizes() {
     if (!wledEnabled || wledHosts.length === 0) return
     wledInfo.running = false
     wledInfo.command = Vis.wledInfoCommand(wledHosts)
     wledInfo.running = true
+  }
+
+  // The effect is changed on the light, from its own web UI or a keybind, and
+  // nothing tells the shell. Re-asking is one 2KB request per light and it is
+  // the only way `params` ever notices. Only while that style is on: the other
+  // three ask once and are right for as long as the strip is the same length.
+  Timer {
+    interval: 10000
+    repeat: true
+    running: root.wledEnabled && root.wledStyle === "params" && root.running
+    onTriggered: root.askWledSizes()
   }
 
   Process {
@@ -493,60 +548,218 @@ Item {
       onRead: function(line) {
         var found = Vis.parseWledInfo(line)
         if (!found) return
-        // Replaced rather than mutated: QML does not notice a property of a
-        // property changing, and the payload would go on using the old length.
-        var next = {}
-        for (var host in root.wledLedCounts) next[host] = root.wledLedCounts[host]
-        next[found.host] = found.count
-        root.wledLedCounts = next
+        var shapes = {}
+        for (var seen in root.wledShapes) shapes[seen] = root.wledShapes[seen]
+        shapes[found.host] = {
+          matrix: found.matrix,
+          width: found.width,
+          height: found.height,
+          canStream: Vis.wledCanStream(found, found.seg),
+          start: Vis.wledStreamStart(found, found.seg)
+        }
+        root.wledShapes = shapes
+
+        // Recorded once, and only while the bridge has not written to this
+        // light yet: probe again mid-song and what comes back is what the
+        // bridge itself put there, so the "before" it saves is its own output.
+        if (found.baseline && !root.wledBaselines[found.host]) {
+          root.wledBaselines[found.host] = found.baseline
+        }
+
+        if (root.wledStyle !== "params") return
+        // The values in this answer are only a baseline while they are still
+        // the user's. Once this style is driving the knobs, re-reading them
+        // reads back what the bridge itself wrote a frame ago, and the centre
+        // it swings around walks off with the music. A changed effect is the
+        // one moment the light's own numbers are trustworthy again, because
+        // WLED resets the sliders to that effect's defaults.
+        if (root.wledEffects[found.host] === found.fx) return
+        var effects = {}
+        for (var known in root.wledEffects) effects[known] = root.wledEffects[known]
+        effects[found.host] = found.fx
+        root.wledEffects = effects
+        root.wledSegs[found.host] = found.seg
+        root.askWledKnobs()
       }
     }
   }
 
+  // Segment 0 as the light last reported it, kept only long enough to pair
+  // with the slider layout that arrives separately.
+  property var wledSegs: ({})
+
+  function askWledKnobs() {
+    if (wledHosts.length === 0) return
+    wledFxData.running = false
+    wledFxData.command = Vis.wledFxDataCommand(wledHosts)
+    wledFxData.running = true
+  }
+
+  Process {
+    id: wledFxData
+    command: Vis.wledFxDataCommand([])
+    stdout: SplitParser {
+      onRead: function(line) {
+        var found = Vis.parseWledFxData(line, root.wledEffects)
+        if (!found) return
+        var declared = Vis.wledDeclaredKnobs(found.meta, root.wledSegs[found.host])
+
+        var all = {}
+        for (var seen in root.wledDeclared) all[seen] = root.wledDeclared[seen]
+        all[found.host] = declared
+        root.wledDeclared = all
+
+        var next = {}
+        for (var host in root.wledKnobs) next[host] = root.wledKnobs[host]
+        next[found.host] = Vis.wledDriveKnobs(declared, root.wledKnob)
+        root.wledKnobs = next
+      }
+    }
+  }
+
+  // One long-lived process for every panel: a frame is a line on its stdin,
+  // and spawning something per frame would cost more in startup than the
+  // frame costs to send. It runs only while there is a panel to paint.
+  readonly property string streamScript:
+    decodeURIComponent(String(Qt.resolvedUrl("bin/omarchy-visualizer-stream"))
+      .replace(/^file:\/\//, ""))
+
+  Process {
+    id: wledStream
+    command: [root.streamScript]
+    stdinEnabled: true
+  }
+
+  // Driven, not bound. A `Process` that exits writes `running` itself, and
+  // that write breaks any binding on it — so one crash, or a missing python3,
+  // would take `bars` out for the rest of the session with nothing said. The
+  // frame loop starts it back up instead, which costs a comparison per frame
+  // and makes the failure last one frame rather than one session.
+  readonly property bool wantsStream:
+    wledEnabled && Vis.isWledPanelStyle(wledStyle) && running
+
+  onWantsStreamChanged: {
+    if (wantsStream) wledStream.running = true
+    else wledStream.running = false
+  }
+
   property real lastSentMs: 0
+  // Per host: two panels of different sizes draw at different rates, and one
+  // clock for both would pace them by whichever is slower.
+  property var lastStreamedMs: ({})
   property bool wledTouched: false
 
   function pushToWled() {
     if (!wledEnabled || wledHosts.length === 0 || frame.length === 0) return
 
     var now = Date.now()
-    // Frames above the rate are dropped rather than queued: a queue would just
-    // move the backlog to the end of the song, and WLED over HTTP stops
-    // answering long before the frame rate.
-    if (!Vis.shouldSendToWled(lastSentMs, now, wledRateHz)) return
-    lastSentMs = now
+    // The rate is an HTTP ceiling, not a taste. A light answers a POST in
+    // something like a tenth of a second and stops answering at all well below
+    // the frame rate, so frames above the cap are dropped rather than queued —
+    // a queue would only move the backlog to the end of the song.
+    //
+    // A realtime packet has none of that: nothing waits for a reply, and the
+    // same panel that managed six frames a second over JSON took a thousand
+    // over UDP. Holding `bars` to the JSON cap threw away half of what cava
+    // produced and the panel moved in steps.
+    var httpDue = Vis.shouldSendToWled(lastSentMs, now, wledRateHz)
+    var httpSent = false
 
     var energy = Vis.frameEnergy(frame)
-    var solid = Vis.wledPayload(Vis.wledBrightness(energy, 0, 255),
-      Vis.wledColor(paletteName, energy, paletteContext))
 
-    wledTouched = true
     for (var i = 0; i < wledHosts.length; i++) {
       var host = wledHosts[i]
-      var leds = Number(wledLedCounts[host]) || 0
 
-      // A strip that has not answered yet gets the one-colour payload rather
-      // than nothing: the bridge works from the first frame and sharpens when
-      // the strip says how long it is.
-      if (wledStyle === "solid" || leds < 2) { send(host, solid); continue }
+      if (Vis.isWledPanelStyle(wledStyle)) {
+        var shape = wledShapes[host]
+        if (shape && shape.canStream) {
+          // Restarted here rather than from a timer: this is the only place
+          // that knows a frame is waiting for it.
+          if (!wledStream.running) { wledStream.running = true; continue }
 
-      var runs = Vis.wledRuns(frame, paletteName, paletteContext, leds, wledStyle)
-      if (runs.length === 0) { send(host, solid); continue }
+          // Paced by the panel, not by the JSON cap and not by cava. Its own
+          // fps is the only number here that describes the thing being fed.
+          if (!Vis.wledStreamDue(lastStreamedMs[host] || 0, now,
+                shape.width * shape.height)) continue
+          lastStreamedMs[host] = now
 
-      // The colours already carry how loud each band is, so global brightness
-      // only follows the room: dropping it to nothing as well would leave a
-      // quiet passage invisible rather than dim.
-      send(host, Vis.wledLivePayload(Vis.wledBrightness(energy, 96, 255), runs))
+          var hex = Vis.wledPanelFrame(frame, paletteName, paletteContext,
+            shape.width, shape.height, fillStyle, wledStyle)
+          // An empty answer is silence, not black: stop writing and the panel
+          // goes back to its own effect on the realtime timeout. Falling
+          // through here would paint over it with a different style instead.
+          if (hex) {
+            wledStream.write(Vis.wledStreamLine(host, shape.start, hex))
+            wledTouched = true
+          }
+          continue
+        }
+        // Only a panel whose segment does not start at the origin lands
+        // here: its pixel-to-LED mapping is the light's own ledmap and cannot
+        // be guessed. Brightness is all that is left to say.
+      }
+
+      if (!httpDue) continue
+      httpSent = true
+
+      // Nothing is known about this light yet — the probe is one round trip
+      // behind the first frame. Brightness follows the music meanwhile; the
+      // one-colour payload must not, because it carries fx 0 and would take
+      // the light's effect away over a question that answers itself in a
+      // moment. That mistake is the one this bridge keeps making.
+      var dim = Vis.wledBrightnessPayload(Vis.wledBrightness(energy, 32, 255))
+
+      if (wledStyle === "params") {
+        var knobs = wledKnobs[host] || []
+        // An effect whose only sliders are Fade rate and Blur has nothing the
+        // audio can move without making it look broken, and about a third of
+        // them are exactly that. Brightness is the honest fallback, not
+        // driving those knobs anyway.
+        if (knobs.length === 0) { send(host, dim); continue }
+        send(host, Vis.wledParamsPayload(knobs, frame, wledSpan / 100))
+        continue
+      }
+
+      var solid = Vis.wledPayload(Vis.wledBrightness(energy, 0, 255),
+        Vis.wledColor(paletteName, energy, paletteContext))
+
+      // `solid` is a choice and gets the payload that carries fx 0. Every
+      // painting style is streamed now, so anything else reaching here is a
+      // light that has not been measured yet or one that cannot be addressed,
+      // and brightness is the only honest thing to send either way.
+      if (wledStyle === "solid") { send(host, solid); continue }
+      send(host, dim)
+    }
+
+    // Advanced only when a JSON frame actually went out, or a run of panels
+    // would starve the cap and every strip alongside them would stall.
+    if (httpSent) {
+      lastSentMs = now
+      wledTouched = true
     }
   }
+
 
   function restoreWled() {
     if (!wledRestore || !wledTouched || wledHosts.length === 0) return
     wledTouched = false
     // Nothing was remembered, so the honest restore is off rather than a guess
     // at what the lamp was doing before.
-    var payload = Vis.wledRestorePayload(null)
-    for (var i = 0; i < wledHosts.length; i++) send(wledHosts[i], payload)
+    for (var i = 0; i < wledHosts.length; i++) {
+      var host = wledHosts[i]
+      send(host, Vis.wledRestorePayload(wledBaselines[host]))
+    }
+    forgetBaselines()
+  }
+
+  // Dropped along with the restore: the next run probes a light that is back
+  // to being itself, and records that instead of a value it wrote.
+  function forgetBaselines() {
+    wledBaselines = ({})
+    wledDeclared = ({})
+    wledKnobs = ({})
+    wledEffects = ({})
+    wledSegs = ({})
   }
 
   // Detached and fire-and-forget: a light that does not answer must not hold up
@@ -560,4 +773,7 @@ Item {
   // Colours come from the panel, which owns the theme bindings.
   property string paletteName: "accent"
   property var paletteContext: ({})
+  // The fill too, or the strip paints a different picture from the screen it
+  // is supposed to be echoing.
+  property string fillStyle: "solid"
 }

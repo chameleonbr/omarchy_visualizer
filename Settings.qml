@@ -26,6 +26,10 @@ Item {
   // light, on the same principle as the colour rows: a control that cannot
   // change anything is worse than an absent one.
   readonly property var wledNames: service ? service.wledNames : []
+  // Only under `params`: the row names sliders of the light's own effect, and
+  // no other style touches them.
+  readonly property var wledKnobLabels:
+    service && service.value("wledStyle") === "params" ? service.wledKnobLabels : []
   readonly property var micNames: service ? service.micNames : []
   readonly property string input: service ? service.value("input") : "system"
 
@@ -36,6 +40,7 @@ Item {
     if (root.input !== "system" && root.micNames.length > 0)
       out = out.concat(Vis.micRows(root.micNames))
     if (root.wledNames.length > 0) out = out.concat(Vis.wledRows(root.wledNames))
+    out = out.concat(Vis.wledKnobRows(root.wledKnobLabels))
     return out
   }
 

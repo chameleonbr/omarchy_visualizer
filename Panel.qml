@@ -78,6 +78,7 @@ BarWidget {
     service.seed = settings || ({})
     service.paletteName = palette
     service.paletteContext = paletteContext
+    service.fillStyle = fillStyle
   }
 
   function value(key, fallback) {
@@ -88,6 +89,13 @@ BarWidget {
 
   onSettingsChanged: pushSettings()
   onPaletteContextChanged: if (service) service.paletteContext = paletteContext
+  // pushSettings only runs when the shell.json seed changes, and the palette
+  // is chosen in the pane — which writes the plugin's own file, not that one.
+  // Without these the service kept whatever palette it was born with, so the
+  // strip painted every band in the accent colour while the screen showed a
+  // rainbow. One flat colour looks like a broken bridge, not a stale setting.
+  onPaletteChanged: if (service) service.paletteName = palette
+  onFillStyleChanged: if (service) service.fillStyle = fillStyle
 
   // The host injects `bar` after construction, so the service resolves later
   // than Component.onCompleted — registering only there loses the count.

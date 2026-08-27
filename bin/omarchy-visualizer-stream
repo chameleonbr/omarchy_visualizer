@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Stream frames to WLED over its own realtime protocol.
+
+HTTP is the wrong pipe for a panel. A 32x24 bar chart is around 4KB of JSON
+and the light answers in 150ms, which caps the whole thing at six frames a
+second; the same picture as DNRGB is 2.3KB of UDP with nobody waiting for a
+reply.
+
+It also removes the restore. A DNRGB packet carries a timeout, and when the
+packets stop the light goes back to whatever effect it was running on its own
+-- so a song that ends leaves nothing behind to put right.
+
+Reads one frame per line on stdin:
+
+    <host>\t<start>\t<hex>
+
+where <hex> is RGB triples, one per pixel, and <start> is the LED index the
+first of them is written at — a strip's segment need not begin at zero, and
+DNRGB indexes the strip rather than the segment. Anything malformed is skipped
+rather than fatal: this process outlives every frame it drops.
+"""
+import socket, sys
+
+PORT = 21324
+DNRGB = 4
+# Seconds the light waits after the last packet before it goes back to being
+# itself. Long enough to ride out a slow frame, short enough that the end of a
+# song is the end of the picture.
+TIMEOUT = 2
+# The protocol's own ceiling: 489 LEDs of payload fit one packet with the
+# four-byte header, so a panel takes two and each says where it starts.
+PER_PACKET = 489
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+# Resolved once per host. `sendto` with a name looks it up every call, and
+# these are .local names — an mDNS round trip, forty times the cost of the send
+# itself, twice per frame, thirty times a second.
+addresses = {}
+
+def address_of(host):
+    if host not in addresses:
+        try:
+            addresses[host] = socket.gethostbyname(host)
+        except OSError:
+            # Cached as a miss too: a name that does not resolve must not cost
+            # a lookup on every frame for the rest of the session.
+            addresses[host] = None
+    return addresses[host]
+
+for line in sys.stdin:
+    fields = line.strip().split("\t")
+    if len(fields) != 3:
+        continue
+    host, offset, payload = fields
+    if not host:
+        continue
+    address = address_of(host)
+    if not address:
+        continue
+    try:
+        first = int(offset)
+        pixels = bytes.fromhex(payload)
+    except ValueError:
+        continue
+    if first < 0 or not pixels or len(pixels) % 3:
+        continue
+
+    count = len(pixels) // 3
+    for at in range(0, count, PER_PACKET):
+        chunk = pixels[at * 3:(at + PER_PACKET) * 3]
+        start = first + at
+        header = bytes([DNRGB, TIMEOUT, (start >> 8) & 0xFF, start & 0xFF])
+        try:
+            sock.sendto(header + chunk, (address, PORT))
+        except OSError:
+            # An unplugged light, or a name that stopped resolving. The next
+            # frame is 60ms away and will find out the same thing; blocking
+            # the others on it would cost every light the one that left.
+            break

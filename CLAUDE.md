@@ -31,7 +31,7 @@ and chokes on some patterns. Filter with python instead.
 
 ## Checks
 
-`node test_visualizer.js` — 57 checks, no framework, no audio, no cava, no
+`node test_visualizer.js` — 134 checks, no framework, no audio, no cava, no
 network. `.pragma library` is stripped before `eval`; it has to stay in the file.
 
 ## Architecture
@@ -46,9 +46,84 @@ I18n.js          every string the plugin says, en + pt
 Settings.qml     the overlay itself
 Spectrum.qml     the drawing, and nothing else
 Visualizer.js    all the logic, and the only part with tests
+bin/             omarchy-visualizer-stream: frames to WLED over DNRGB/UDP
 ```
 
+`bin/omarchy-visualizer-stream` is the only thing here that needs `python3`,
+and only `wledStyle: bars` uses it. HTTP cannot carry a panel — the same frame
+as JSON is ~4KB that a 32x24 panel answers in 150ms.
+
 ## Things that will bite you
+
+- **A Repeater given a JS array does not diff it.** `model: root.frame` is a
+  reset on every frame: every delegate destroyed and rebuilt. At fourteen
+  columns of eight blocks on three monitors that was ten thousand Rectangles a
+  second and 90% of a core, and the comment directly above it already warned
+  about delegate rebuilds while the line below did exactly that. The model is
+  `root.count`, which only moves when `barCount` does; delegates read
+  `root.frame[index]` in a binding of their own. Read it inline, not through a
+  helper — the binding has to touch `root.frame` itself to depend on it.
+
+- **`Canvas.Cooperative` paints on the GUI thread.** The same thread every
+  binding runs on, into a software image. The wave is a `Shape`/`ShapePath`
+  now, tessellated on the render thread; the only work left on this side is
+  turning a frame into points.
+
+- **Silence over silence is not a frame.** Assigning an all-zero frame over an
+  all-zero one still changes the property and repaints every bar on every
+  monitor. The transition INTO silence still has to be assigned, and the peaks
+  have to be quiet too, or the bars freeze halfway down.
+
+- **`playing` counted the plugin's own loopbacks.** `input: both` loads a null
+  sink and two loopbacks, and a loopback is a stream on the sink side — which
+  is what the guard looks for. The plugin created the evidence that convinced
+  it something was playing, so `pauseWhenSilent` could not fire once the mix
+  was up. `Vis.isPlaying` skips anything whose `target.object` is `MIX_SINK`.
+  Nothing in pipewire separates a silent stream from a playing one — Chrome
+  holds one `running` and uncorked with nothing playing — so the frames are
+  the only honest source for "is there sound".
+
+- **The bridge must record before it overwrites.** `solid` sends `fx: 0` and
+  `pal: 0` — it has to, or the effect keeps running and the colour is
+  decoration — and the restore used to send only `on: false`. A song ended
+  with every light left on Solid, its effect gone for good. One baseline is
+  taken on the probe, before anything is written, and only while the bridge
+  has not touched that light: probe again mid-song and what comes back is what
+  the bridge itself put there.
+
+- **Never send the one-colour payload as a "do not know yet" fallback.** It
+  carries `fx: 0`. A strip that has not answered, an effect with no knob worth
+  driving, a panel not yet measured — all get `wledBrightnessPayload`, which is
+  `{on, bri}` and nothing else. This mistake was made three times in one day.
+
+- **On a matrix, `stop - start` is the width.** `info.leds.matrix` says whether
+  there is a panel; the pixel count is width × height. A 32×24 panel reported
+  32, and `info.leds.count` said 1344 for 768 pixels.
+
+- **`/json/fxdata` truncates.** 9205 bytes ten times in twelve and 5514 twice,
+  cut mid-array. Half a JSON document does not parse, and the slider layout is
+  asked once per effect change, so one short answer left `params` with no knobs
+  and nothing to say about it. The probe retries until the body ends with its
+  own closer. `/json/si` is a quarter of the size and never came back short.
+
+- **One paint path, and it is UDP.** Strips were painted with run-length
+  `seg.i` under a frozen segment, on the JSON path, capped at `wledRateHz`.
+  They are streamed like the panel now, with the segment's own `start` as the
+  DNRGB offset. That is what removed the freeze — and a freeze not lifted is
+  what left lights holding the last frame of a song after a session died. Only
+  a panel whose segment is not at the origin still cannot be streamed: its
+  pixel-to-LED mapping is the light's own ledmap. `solid` and `params` stay on
+  JSON because they write segment STATE (`fx`, `pal`, `col`, the sliders),
+  which a realtime packet cannot carry.
+
+- **Realtime is paced in packets, not frames.** DNRGB carries 489 pixels.
+  `info.leds.fps` looks like the number to pace by and is not — it reports 30
+  under one effect and 70 under another, and under realtime it just echoes what
+  it is being fed, so pacing on it is a loop measuring itself.
+
+- **Do not bind `Process.running` for a process that can exit.** The exit
+  writes `running`, which breaks the binding, so it never restarts. The DNRGB
+  streamer is driven from a change handler and restarted from the frame loop.
 
 - **`SETTING_ROWS` is not the whole list any more.** The WLED rows live in
   `WLED_ROWS` and only join the pane when `wled.json` names a light, so a

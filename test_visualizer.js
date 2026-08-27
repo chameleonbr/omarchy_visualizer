@@ -387,15 +387,82 @@ check("the payload is the WLED state API and nothing exotic", () => {
   assert.deepStrictEqual(payload.seg[0].col[0], [255, 0, 128])
 })
 
+check("the plugin's own loopbacks are not somebody playing music", () => {
+  // `input: both` loads a null sink and two loopbacks, and a loopback is a
+  // stream on the sink side -- which is what `playing` looks for. The plugin
+  // created the evidence that convinced it something was playing, so
+  // pauseWhenSilent could never fire once the mix was up.
+  const mix = { isStream: true, isSink: true, name: "output.loopback-1700-13",
+    properties: { "target.object": "omarchy_visualizer_mix" } }
+  const sink = { isStream: false, isSink: true, name: "omarchy_visualizer_mix", properties: {} }
+  const chrome = { isStream: true, isSink: true, name: "Google Chrome", properties: {} }
+  const mic = { isStream: true, isSink: false, name: "cava", properties: {} }
+
+  assert.strictEqual(isPlaying([mix, mix, sink, mic]), false,
+    "our own graph, and a capture, and nothing else")
+  assert.strictEqual(isPlaying([mix, chrome]), true, "somebody else's stream counts")
+  assert.strictEqual(isPlaying([]), false)
+  assert.strictEqual(isPlaying(null), false)
+  assert.strictEqual(isPlaying([null, undefined]), false)
+
+  assert.strictEqual(isOwnMixNode({ "target.object": "omarchy_visualizer_mix" }, "x"), true)
+  assert.strictEqual(isOwnMixNode({}, "omarchy_visualizer_mix"), true, "the sink itself")
+  assert.strictEqual(isOwnMixNode({ "target.object": "alsa_output.pci" }, "Firefox"), false)
+  assert.strictEqual(isOwnMixNode(null, null), false)
+})
+
+check("silence over silence is not a frame to draw", () => {
+  // Assigning a frame of zeroes over a frame of zeroes still changes the
+  // property, re-evaluates every binding under it and repaints every bar on
+  // every monitor to draw the same nothing.
+  assert.strictEqual(isSilentFrame([0, 0, 0]), true)
+  assert.strictEqual(isSilentFrame([]), true)
+  assert.strictEqual(isSilentFrame(null), true)
+  assert.strictEqual(isSilentFrame([0, 0, 1]), false, "one band above the floor is sound")
+
+  // The floor is what decides quiet; this only decides that quiet twice
+  // running is not news. A frame under the floor arrives here already zeroed.
+  assert.deepStrictEqual(applyFloor([1, 2, 9], 3), [0, 0, 9])
+  assert.strictEqual(isSilentFrame(applyFloor([1, 2], 3)), true)
+  assert.strictEqual(isSilentFrame(applyFloor([1, 2], 0)), false,
+    "and with no floor set, room noise is still something")
+})
+
+check("what the light was doing is recorded before anything overwrites it", () => {
+  // The bug this exists for: `solid` sends fx 0 and pal 0 -- it has to, or the
+  // effect keeps running and the colour is decoration -- and the restore only
+  // sent `on: false`. So a song ended with every light left on Solid, its
+  // effect and palette gone for good. Borrowing the strip is the deal; keeping
+  // it is not.
+  const before = wledBaseline({
+    on: true, bri: 124,
+    seg: [{ id: 0, fx: 188, pal: 63, sx: 110, ix: 128, c1: 110, c2: 50, c3: 31,
+            o1: true, frz: true, col: [[181, 138, 255]] }]
+  })
+  assert.strictEqual(before.bri, 124)
+  assert.strictEqual(before.seg.fx, 188)
+  assert.strictEqual(before.seg.pal, 63)
+  assert.deepStrictEqual(before.seg.col, [[181, 138, 255]])
+  assert.strictEqual(before.seg.frz, false,
+    "a strip found frozen is not handed back frozen: that is the state to escape")
+  assert.strictEqual(wledBaseline({ on: true, seg: [] }), null)
+  assert.strictEqual(wledBaseline(null), null)
+})
+
 check("the restore puts the lamp back, and says so plainly when it cannot", () => {
   // Leaving a lamp frozen on a colour after the music stops is the worst thing
   // this bridge can do.
-  const restored = JSON.parse(wledRestorePayload({ on: true, bri: 200, seg: [{ col: [[1, 2, 3]] }] }))
+  const restored = JSON.parse(wledRestorePayload(
+    wledBaseline({ on: true, bri: 200, seg: [{ fx: 87, pal: 3, col: [[1, 2, 3]] }] })))
   assert.strictEqual(restored.bri, 200)
+  assert.strictEqual(restored.seg[0].fx, 87, "the effect, not just the colour")
+  assert.strictEqual(restored.seg[0].pal, 3)
+  assert.strictEqual(restored.seg[0].frz, false)
   assert.deepStrictEqual(restored.seg[0].col[0], [1, 2, 3])
 
   const unknown = JSON.parse(wledRestorePayload(null))
   assert.strictEqual(unknown.on, false, "nothing remembered: turn it off rather than guess")
+  assert.strictEqual(unknown.seg[0].frz, false, "and the freeze is lifted either way")
 })
 
 
@@ -865,30 +932,32 @@ check("a letter for a row that is not on screen does nothing", () => {
     "the axes are still there")
 })
 
-check("the strip is painted band by band, in runs rather than per LED", () => {
-  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
-    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
-  const frame = [10, 50, 90, 20]
-  const runs = wledRuns(frame, "rainbow", ctx, 12, "spectrum")
+const STRIP_CTX = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+  urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+const stripPixel = (hex, i) => hex.slice(i * 6, i * 6 + 6)
 
-  assert.strictEqual(runs.length % 3, 0, "start, stop, colour")
-  assert.strictEqual(runs.length, 12, "four bands, four runs — not twelve LEDs")
-  assert.strictEqual(runs[0], 0, "the first run starts at the first LED")
-  assert.strictEqual(runs[runs.length - 2], 12, "and the last one ends at the last")
+check("a strip is a panel one row tall, and is painted the same way", () => {
+  // It used to be painted here with run-length `seg.i` indices under a frozen
+  // segment, on the JSON path, capped at wledRateHz. One paint path now, and
+  // no freeze to lift afterwards -- a frozen segment nobody unfreezes keeps
+  // the last frame of the music for as long as the light stays on, which is
+  // what a session that died without its teardown left behind more than once.
+  const hex = wledPanelFrame([10, 50, 90, 20], "rainbow", STRIP_CTX, 12, 1,
+    "solid", "spectrum")
+  assert.strictEqual(hex.length, 12 * 6, "one RGB triple per LED, no more")
+  for (let i = 0; i < 12; i++) {
+    assert.ok(/^[0-9A-F]{6}$/.test(stripPixel(hex, i)), "WLED wants RRGGBB")
+  }
 
-  for (let i = 0; i + 3 < runs.length; i += 3) {
-    assert.strictEqual(runs[i + 1], runs[i + 3], "no LED is left unpainted")
-  }
-  for (let i = 2; i < runs.length; i += 3) {
-    assert.ok(/^[0-9A-F]{6}$/.test(runs[i]), "WLED wants RRGGBB: " + runs[i])
-  }
+  // `bars` has nowhere to put a height on one row, so it is `spectrum` there
+  // rather than a row of LEDs that are either full on or off.
+  assert.strictEqual(
+    wledPanelFrame([10, 50, 90, 20], "rainbow", STRIP_CTX, 12, 1, "solid", "bars"), hex)
 })
 
 check("a band that is quiet is dim, not missing", () => {
-  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
-    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
-  const loud = wledRuns([100], "rainbow", ctx, 4, "spectrum")[2]
-  const quiet = wledRuns([0], "rainbow", ctx, 4, "spectrum")[2]
+  const loud = stripPixel(wledPanelFrame([100], "rainbow", STRIP_CTX, 4, 1, "solid", "spectrum"), 0)
+  const quiet = stripPixel(wledPanelFrame([1], "rainbow", STRIP_CTX, 4, 1, "solid", "spectrum"), 0)
   assert.notStrictEqual(quiet, "000000", "a dark stretch reads as a fault, not as quiet")
   assert.notStrictEqual(quiet, loud, "and it is still darker than a loud one")
 })
@@ -897,45 +966,359 @@ check("every band gets its own colour, which is what a strip is for", () => {
   // The bug this replaced: the payload asked the palette for band 0 of 1, so
   // a position palette answered with the same hue every time and the whole
   // strip was one colour no matter what was playing.
-  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
-    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
-  const runs = wledRuns([60, 60, 60, 60], "rainbow", ctx, 8, "spectrum")
-  const colors = []
-  for (let i = 2; i < runs.length; i += 3) colors.push(runs[i])
-  assert.strictEqual(new Set(colors).size, colors.length, "four bands, four colours")
+  const hex = wledPanelFrame([60, 60, 60, 60], "rainbow", STRIP_CTX, 8, 1, "solid", "spectrum")
+  const colors = new Set()
+  for (let i = 0; i < 8; i++) colors.add(stripPixel(hex, i))
+  assert.strictEqual(colors.size, 4, "four bands, four colours, two LEDs each")
 })
 
 check("mirror folds the same bands around the middle", () => {
-  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
-    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
-  const runs = wledRuns([10, 50, 90, 20], "rainbow", ctx, 12, "mirror")
-  const first = runs[2]
-  const last = runs[runs.length - 1]
-  assert.strictEqual(first, last, "both ends show the same band")
+  const hex = wledPanelFrame([10, 50, 90, 20], "rainbow", STRIP_CTX, 12, 1, "solid", "mirror")
+  assert.strictEqual(stripPixel(hex, 0), stripPixel(hex, 11), "both ends show the same band")
   assert.strictEqual(wledBandAt(0, 12, 4, "mirror"), wledBandAt(11, 12, 4, "mirror"))
   assert.strictEqual(wledBandAt(5, 12, 4, "mirror"), wledBandAt(6, 12, 4, "mirror"),
     "and the middle is where the low band lives")
 })
 
-check("a strip that has not answered yet is not painted band by band", () => {
-  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
-    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
-  assert.deepStrictEqual(wledRuns([50], "rainbow", ctx, 0, "spectrum"), [])
-  assert.deepStrictEqual(wledRuns([], "rainbow", ctx, 30, "spectrum"), [])
-  assert.deepStrictEqual(wledRuns(null, "rainbow", ctx, 30, "spectrum"), [])
+check("a light that has not answered yet is not painted at all", () => {
+  assert.strictEqual(wledPanelFrame([50], "rainbow", STRIP_CTX, 0, 1, "solid", "spectrum"), "")
+  assert.strictEqual(wledPanelFrame([], "rainbow", STRIP_CTX, 30, 1, "solid", "spectrum"), "")
+  assert.strictEqual(wledPanelFrame(null, "rainbow", STRIP_CTX, 30, 1, "solid", "spectrum"), "")
 })
 
-check("the live payload freezes the segment it paints", () => {
-  // The bug this replaced: the effect engine owns the segment and repaints
-  // every LED on its next tick, so individual LEDs written underneath it last
-  // a few milliseconds and the strip shows one colour. Freezing stops that.
-  const payload = JSON.parse(wledLivePayload(200, [0, 4, "FF0000"]))
-  assert.strictEqual(payload.on, true)
-  assert.strictEqual(payload.bri, 200)
-  assert.strictEqual(payload.seg[0].frz, true, "without this the effect paints over it")
-  assert.strictEqual(payload.seg[0].fx, undefined,
-    "the strip's own effect is not this bridge's to change")
-  assert.deepStrictEqual(payload.seg[0].i, [0, 4, "FF0000"])
+// PS Fire, as a Gledopto running WLED 16 reports it. Eight labels: five
+// sliders and three checkboxes, and the checkboxes are not this bridge's to
+// touch — flipping a boolean fifteen times a second is a glitch, not motion.
+const PS_FIRE = "Speed,Intensity,Flame Height,Wind,Spread,Smooth,Cylinder,Turbulence;;!;2;pal=35"
+const PS_FIRE_SEG = { sx: 110, ix: 128, c1: 110, c2: 50, c3: 31 }
+
+check("an effect says which knobs it has, and the light says where they sit", () => {
+  const knobs = wledDeclaredKnobs(PS_FIRE, PS_FIRE_SEG)
+  assert.deepStrictEqual(knobs.map(k => k.key), ["sx", "ix", "c1", "c2", "c3"])
+  assert.deepStrictEqual(knobs.map(k => k.label),
+    ["Speed", "Intensity", "Flame Height", "Wind", "Spread"])
+  assert.deepStrictEqual(knobs.map(k => k.base), [110, 128, 110, 50, 31])
+  assert.strictEqual(knobs[4].max, 31, "c3 is the one that does not go to 255")
+
+  // A label the effect leaves blank is a slider it does not use. Driving it
+  // writes a value the effect never reads, which is invisible and confusing.
+  assert.deepStrictEqual(
+    wledDeclaredKnobs("Cooling,Spark rate,,2D Blur,Boost", {}).map(k => k.key),
+    ["sx", "ix", "c2", "c3"])
+  assert.deepStrictEqual(wledDeclaredKnobs(";!,!;!;01f", {}), [])
+  assert.deepStrictEqual(wledDeclaredKnobs("", {}), [], "Solid has no sliders at all")
+  assert.strictEqual(wledDeclaredKnobs("Speed", {})[0].base, 128,
+    "a light that did not say defaults to the middle, not to zero")
+})
+
+check("the knobs that do not take modulation are left alone", () => {
+  assert.deepStrictEqual(
+    wledPickKnobs(wledDeclaredKnobs(PS_FIRE, PS_FIRE_SEG)).map(k => k.label),
+    ["Intensity", "Flame Height", "Wind", "Spread"], "Speed is the effect's own clock")
+
+  // Roughly a third of WLED's effects declare nothing but decay knobs. Empty
+  // is the honest answer there; the caller falls back to brightness rather
+  // than driving Fade rate and Blur and calling the result a visualiser.
+  assert.deepStrictEqual(wledPickKnobs(wledDeclaredKnobs("Fade rate,Blur", {})), [])
+  assert.deepStrictEqual(wledPickKnobs([]), [])
+  for (const label of ["Blur", "2D Blur", "Fade rate", "Scroll speed", "Select bin",
+                       "Sensitivity", "Volume (min)", "Starting color", "Font size"]) {
+    assert.strictEqual(wledKnobModulatable(label), false, label)
+  }
+  for (const label of ["Flame Height", "Wind", "Gravity", "# of balls", "Density",
+                       "Explosion Size", "Amplitude 1", "Cooling"]) {
+    assert.strictEqual(wledKnobModulatable(label), true, label)
+  }
+})
+
+check("the knob the spectrum drives can be named, and is named by label", () => {
+  const declared = wledDeclaredKnobs(PS_FIRE, PS_FIRE_SEG)
+  assert.deepStrictEqual(wledKnobLabels(declared),
+    ["Speed", "Intensity", "Flame Height", "Wind", "Spread"])
+
+  // By label, not by key: `c1` is "Flame Height" on PS Fire, "Low bin" on
+  // Freqwave and "Arms" on PS Vortex. The key names a slot; only the label
+  // names a thing, and it is the word the light's own app shows.
+  const one = wledDriveKnobs(declared, "Wind")
+  assert.deepStrictEqual(one.map(k => k.label), ["Wind"])
+  assert.strictEqual(one[0].key, "c2")
+  assert.strictEqual(one[0].base, 50, "and it keeps the value the light had")
+
+  // Nothing asked for: the blocklist's guess, which is what it always was.
+  assert.deepStrictEqual(wledDriveKnobs(declared, "").map(k => k.label),
+    ["Intensity", "Flame Height", "Wind", "Spread"])
+
+  // A name the current effect does not have is the effect having been changed
+  // on the light, not an error. The guess beats driving nothing, and beats
+  // guessing which of the new sliders was meant.
+  assert.deepStrictEqual(wledDriveKnobs(declared, "Cooling").map(k => k.label),
+    ["Intensity", "Flame Height", "Wind", "Spread"])
+  assert.deepStrictEqual(wledDriveKnobs([], "Wind"), [])
+
+  // The row is offered only when there is more than nothing to choose between.
+  assert.strictEqual(wledKnobRows([]).length, 0)
+  assert.strictEqual(wledKnobRows(null).length, 0)
+  const row = wledKnobRows(["Wind", "Spread"])[0]
+  assert.strictEqual(row.key, "wledKnob")
+  assert.deepStrictEqual(row.values, ["", "Wind", "Spread"], "empty is the guess")
+})
+
+check("one named knob hears the whole spectrum", () => {
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  // With four knobs each takes a quarter of the bands. With one it takes all
+  // of them, or naming a single knob would wire it to the bass alone and the
+  // rest of the song would go nowhere.
+  const only = wledDriveKnobs(wledDeclaredKnobs(PS_FIRE, PS_FIRE_SEG), "Wind")
+  const wide = JSON.parse(wledParamsPayload(only, [100, 100, 100, 100], 0.4)).seg[0]
+  const treble = JSON.parse(wledParamsPayload(only, [0, 0, 0, 100], 0.4)).seg[0]
+  const bass = JSON.parse(wledParamsPayload(only, [100, 0, 0, 0], 0.4)).seg[0]
+  assert.strictEqual(wide.c2, 50 + Math.round(0.4 * 255))
+  assert.strictEqual(treble.c2, bass.c2,
+    "one knob hears every band alike, rather than being wired to the bass")
+  assert.notStrictEqual(wide.c2, treble.c2)
+  assert.deepStrictEqual(Object.keys(wide), ["id", "c2"], "nothing else is touched")
+})
+
+check("each knob gets its own slice of the spectrum", () => {
+  // One number driving every knob is what brightness already does, and it
+  // makes the whole effect pulse in phase. Low bands first: the knob that
+  // moves most is the one the bass is on.
+  const frame = [100, 100, 0, 0]
+  assert.strictEqual(wledKnobLevel(frame, 0, 2), 1)
+  assert.strictEqual(wledKnobLevel(frame, 1, 2), 0)
+  assert.strictEqual(wledKnobLevel([100, 0], 0, 1), 0.5, "one knob hears everything")
+  // More knobs than bands: a slice is never empty, so a knob never divides by
+  // zero and never silently reads as full silence.
+  assert.strictEqual(wledKnobLevel([100], 3, 8), 1)
+  assert.strictEqual(wledKnobLevel([], 0, 4), 0)
+  assert.strictEqual(wledKnobLevel(null, 0, 4), 0)
+})
+
+check("the effect keeps running while the audio moves its knobs", () => {
+  const knobs = wledPickKnobs(wledDeclaredKnobs(PS_FIRE, PS_FIRE_SEG))
+  const payload = JSON.parse(wledParamsPayload(knobs, [100, 100, 100, 100], 0.4))
+  const seg = payload.seg[0]
+
+  assert.strictEqual(seg.frz, undefined, "freezing it would stop the effect this style is for")
+  assert.strictEqual(seg.fx, undefined, "the effect is the point")
+  assert.strictEqual(seg.col, undefined)
+  assert.strictEqual(payload.bri, undefined, "the knobs carry the audio here, not the brightness")
+
+  // Full scale, so every knob is at its base plus the whole span.
+  assert.strictEqual(seg.ix, 128 + Math.round(0.4 * 255))
+  assert.strictEqual(seg.c2, 50 + Math.round(0.4 * 255))
+  assert.strictEqual(seg.c3, 31, "and clamped to its own ceiling, not to 255")
+
+  // Bipolar around the base: silence has to give back what the user tuned,
+  // and a knob that only ever rises spends the quiet half of a song pinned.
+  const quiet = JSON.parse(wledParamsPayload(knobs, [0, 0, 0, 0], 0.4)).seg[0]
+  assert.strictEqual(quiet.c2, Math.max(0, 50 - Math.round(0.4 * 255)))
+  const still = JSON.parse(wledParamsPayload(knobs, [50, 50, 50, 50], 0.4)).seg[0]
+  assert.deepStrictEqual([still.ix, still.c1, still.c2, still.c3], [128, 110, 50, 31])
+  assert.deepStrictEqual(JSON.parse(wledParamsPayload(knobs, [100, 100], 0)).seg[0],
+    { id: 0, ix: 128, c1: 110, c2: 50, c3: 31 }, "no span, no movement")
+})
+
+check("a panel gets bars, one column per band, standing on the floor", () => {
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  // Four columns, four rows, two bands: half the panel per band. Full scale on
+  // the first band, silence on the second.
+  const hex = wledPanelFrame([100, 0], "rainbow", ctx, 4, 4, "solid", "bars")
+  assert.strictEqual(hex.length, 4 * 4 * 6, "one RGB triple per pixel, no more")
+
+  const pixel = (x, y) => hex.slice((y * 4 + x) * 6, (y * 4 + x) * 6 + 6)
+  // Row-major with y=0 at the top, so a full-height bar reaches the top row
+  // and an empty one is dark all the way down.
+  for (let y = 0; y < 4; y++) {
+    assert.notStrictEqual(pixel(0, y), "000000", "loud band, row " + y)
+    assert.strictEqual(pixel(3, y), "000000", "silent band, row " + y)
+  }
+
+  // Half scale is half the rows, and it is the BOTTOM half: bars stand on the
+  // floor. Getting this upside down is invisible in a test that only counts
+  // lit pixels.
+  const half = wledPanelFrame([50], "rainbow", ctx, 1, 4, "solid", "bars")
+  const rows = [0, 1, 2, 3].map(y => half.slice(y * 6, y * 6 + 6))
+  assert.deepStrictEqual(rows.map(c => c !== "000000"), [false, false, true, true])
+
+  // Silence is no frame at all, not a frame of black: realtime packets hold
+  // the light in realtime for as long as they arrive, so streaming black
+  // would pin a dark panel instead of letting it go back to its effect.
+  assert.strictEqual(wledPanelFrame([0, 0], "rainbow", ctx, 4, 4, "solid", "bars"), "")
+  assert.notStrictEqual(wledPanelFrame([5, 0], "rainbow", ctx, 4, 24, "solid", "bars"), "",
+    "but one band barely moving is still something to draw")
+  assert.strictEqual(wledPanelFrame([], "rainbow", ctx, 4, 4, "solid", "bars"), "")
+  assert.strictEqual(wledPanelFrame([100], "rainbow", ctx, 0, 4, "solid", "bars"), "")
+  assert.strictEqual(wledPanelFrame(null, "rainbow", ctx, 4, 4, "solid", "bars"), "")
+})
+
+check("a panel bar is the bar on screen, gradient and all", () => {
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  // The bug this replaced: the strip painted one flat colour per band while
+  // the screen drew each bar as a gradient, so the two never matched. A panel
+  // bar has a height, so it can show the whole pair.
+  const pair = barGradientPair("rainbow", 0, 1, 100, ctx, "barGradient")
+  const hex = wledPanelFrame([100], "rainbow", ctx, 1, 8, "barGradient", "bars")
+  const rows = []
+  for (let y = 0; y < 8; y++) rows.push(hex.slice(y * 6, y * 6 + 6))
+
+  assert.strictEqual(rows[7], wledHex(pair.base), "the base sits on the floor")
+  assert.strictEqual(rows[0], wledHex(pair.tip), "the tip is the top of the bar")
+  assert.notStrictEqual(rows[0], rows[7], "and they are two colours, not one")
+  assert.strictEqual(new Set(rows).size, 8, "every row between them differs")
+
+  // A short bar still shows both ends -- the tip is the top of THIS bar, not
+  // the top of the panel, the same way a quiet bar on screen still has one.
+  const quiet = wledPanelFrame([25], "rainbow", ctx, 1, 8, "barGradient", "bars")
+  const short = [0, 1, 2, 3, 4, 5, 6, 7].map(y => quiet.slice(y * 6, y * 6 + 6))
+  assert.deepStrictEqual(short.slice(0, 6), Array(6).fill("000000"))
+  assert.strictEqual(short[6], wledHex(barGradientPair("rainbow", 0, 1, 25, ctx, "barGradient").tip))
+  assert.notStrictEqual(short[6], short[7])
+
+  // The fill is a setting, and it has to reach here: `solid` means one colour
+  // up the whole column, and reading the same picture as `barGradient` would
+  // mean the setting never arrived.
+  const flat = wledPanelFrame([100], "rainbow", ctx, 1, 8, "solid", "bars")
+  assert.strictEqual(new Set([0, 1, 2, 3, 4, 5, 6, 7]
+    .map(y => flat.slice(y * 6, y * 6 + 6))).size, 1)
+  assert.notStrictEqual(flat, hex)
+})
+
+check("on a panel, spectrum runs along the width and fills the height", () => {
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  // The bug: `spectrum` and `mirror` went out as run-length indices over all
+  // 768 pixels, which is a line that snakes across the rows. The bands did not
+  // line up with the columns and nothing lined up with the height -- a
+  // rectangle treated as a long strip.
+  const hex = wledPanelFrame([100, 0], "rainbow", ctx, 4, 4, "solid", "spectrum")
+  const px = (x, y) => hex.slice((y * 4 + x) * 6, (y * 4 + x) * 6 + 6)
+
+  for (let y = 0; y < 4; y++) {
+    assert.strictEqual(px(0, y), px(0, 0), "a column is one colour, top to bottom")
+    assert.notStrictEqual(px(0, y), "000000", "and the loud band fills its height")
+    // Never black: a quiet band that goes dark takes its stretch of the panel
+    // out of the picture and the whole thing reads as a fault.
+    assert.notStrictEqual(px(3, y), "000000", "the quiet band is dim, not gone")
+  }
+  assert.notStrictEqual(px(0, 0), px(3, 0), "loud and quiet differ in brightness")
+
+  // `bars` is the one that puts the value in the height instead.
+  const bars = wledPanelFrame([100, 0], "rainbow", ctx, 4, 4, "solid", "bars")
+  assert.strictEqual(bars.slice((0 * 4 + 3) * 6, (0 * 4 + 3) * 6 + 6), "000000",
+    "a silent band has no bar at all")
+})
+
+check("mirror folds the bands across the width, not along the wire", () => {
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  // Eight columns, two bands: the low band belongs in the middle and the high
+  // one at both edges, which is the same fold the strip does over its wire.
+  const hex = wledPanelFrame([100, 10], "rainbow", ctx, 8, 1, "solid", "mirror")
+  const col = x => hex.slice(x * 6, x * 6 + 6)
+  assert.strictEqual(col(3), col(4), "the middle two share the low band")
+  assert.strictEqual(col(0), col(7), "and the two edges share the high one")
+  assert.notStrictEqual(col(0), col(3))
+
+  const straight = wledPanelFrame([100, 10], "rainbow", ctx, 8, 1, "solid", "spectrum")
+  assert.notStrictEqual(straight.slice(0, 6), straight.slice(7 * 6, 7 * 6 + 6),
+    "unfolded, the two ends are different bands")
+  assert.notStrictEqual(hex, straight)
+
+  assert.strictEqual(isWledPanelStyle("bars"), true)
+  assert.strictEqual(isWledPanelStyle("spectrum"), true)
+  assert.strictEqual(isWledPanelStyle("mirror"), true)
+  assert.strictEqual(isWledPanelStyle("solid"), false, "a lamp style, not a panel one")
+  assert.strictEqual(isWledPanelStyle("params"), false)
+})
+
+check("a strip can always be streamed; a panel only from the origin", () => {
+  // DNRGB indexes LEDs in order, so a strip's segment start is just the index
+  // its frame is written at. Which LED a PANEL pixel lands on is the light's
+  // own ledmap, unknowable from here, so a segment starting anywhere else
+  // would be painted through a mapping this plugin invented.
+  const panel = { matrix: true, width: 32, height: 24 }
+  const strip = { matrix: false, width: 49, height: 1 }
+
+  assert.strictEqual(wledCanStream(panel, { start: 0, startY: 0 }), true)
+  assert.strictEqual(wledCanStream(panel, { start: 8, startY: 0 }), false)
+  assert.strictEqual(wledCanStream(panel, { start: 0, startY: 4 }), false)
+  assert.strictEqual(wledCanStream(strip, { start: 0 }), true)
+  assert.strictEqual(wledCanStream(strip, { start: 12 }), true, "an offset is an offset")
+  assert.strictEqual(wledCanStream(null, {}), false)
+
+  assert.strictEqual(wledStreamStart(strip, { start: 12 }), 12)
+  assert.strictEqual(wledStreamStart(strip, {}), 0)
+  assert.strictEqual(wledStreamStart(panel, { start: 0, startY: 0 }), 0,
+    "a panel is only ever written from zero")
+})
+
+check("a light is fed in packets, not in frames", () => {
+  // The bug: a 768-pixel panel is two DNRGB packets, so pacing by frames sent
+  // 60 packets a second into something turning over 37 times. What WLED drops
+  // is what arrived last — the second half of every frame, which on a bar
+  // chart is the half the bars stand on. It read as a second of lag.
+  assert.strictEqual(wledStreamPackets(489), 1, "the protocol's own ceiling")
+  assert.strictEqual(wledStreamPackets(490), 2)
+  assert.strictEqual(wledStreamPackets(768), 2)
+  assert.strictEqual(wledStreamPackets(49), 1, "a strip is always one")
+  assert.strictEqual(wledStreamPackets(0), 1, "never zero, or nothing is ever due")
+
+  // The budget is packets a second, so the frame rate a light gets is that
+  // budget divided by what one frame costs it.
+  assert.strictEqual(wledStreamFps(400), 50, "one packet, so the whole budget")
+  assert.strictEqual(wledStreamFps(768), 25, "two packets, so half of it")
+  assert.strictEqual(wledStreamFps(2000), 10)
+
+  assert.strictEqual(wledStreamDue(0, 19, 400), false, "19ms is not quite 1/50")
+  assert.strictEqual(wledStreamDue(0, 20, 400), true)
+  assert.strictEqual(wledStreamDue(0, 20, 768), false, "the panel waits twice as long")
+  assert.strictEqual(wledStreamDue(0, 40, 768), true)
+})
+
+check("the host travels as data, never as command", () => {
+  assert.strictEqual(wledStreamLine("led.local", 0, "FF0000"), "led.local\t0\tFF0000\n")
+  assert.strictEqual(wledStreamLine("led.local", 12, "FF0000"), "led.local\t12\tFF0000\n")
+  assert.strictEqual(wledStreamLine("a", -3, "00"), "a\t0\t00\n", "never behind the first LED")
+  // One line per frame is what lets the streamer outlive the frames it drops,
+  // and a tab is the one character neither a host nor a hex string contains.
+  assert.strictEqual(wledStreamLine("a", 0, "00").split("\n").length, 2)
+})
+
+check("an effect with no knob to drive keeps its effect", () => {
+  // The one-colour payload carries fx 0. Sending it as the fallback would
+  // turn "nothing here takes modulation" into "your effect is gone", which is
+  // the loudest possible way to handle a case that should be quiet.
+  const payload = JSON.parse(wledBrightnessPayload(200))
+  assert.deepStrictEqual(payload, { on: true, bri: 200 })
+  assert.strictEqual(payload.seg, undefined)
+})
+
+check("stopping puts the knobs back where the light had them", () => {
+  // `params` moves sliders rather than taking the strip, so the same recorded
+  // baseline that undoes `solid` undoes this too -- one restore, not one per
+  // style, because a style added later would otherwise arrive without one.
+  const restore = JSON.parse(wledRestorePayload(wledBaseline({
+    on: true, bri: 124, seg: [Object.assign({ id: 0, fx: 188 }, PS_FIRE_SEG)]
+  })))
+  assert.strictEqual(restore.on, true, "it was never taken away, so off is not a restore")
+  assert.strictEqual(restore.seg[0].fx, 188)
+  assert.deepStrictEqual(
+    [restore.seg[0].sx, restore.seg[0].ix, restore.seg[0].c1,
+     restore.seg[0].c2, restore.seg[0].c3], [110, 128, 110, 50, 31])
+})
+
+check("solid means solid, not the strip's effect tinted", () => {
+  // The bug: col alone. An unfrozen segment keeps running fx, and any palette
+  // but Default ignores col[0] — so the lamp showed its own effect in its own
+  // colours while the plugin thought it was driving it.
+  const solid = JSON.parse(wledPayload(128, { r: 1, g: 0, b: 0 })).seg[0]
+  assert.strictEqual(solid.fx, 0, "Solid")
+  assert.strictEqual(solid.pal, 0, "Default, or col[0] is ignored")
+  assert.deepStrictEqual(solid.col, [[255, 0, 0]])
 })
 
 check("every way out of the spectrum lifts the freeze", () => {
@@ -947,24 +1330,129 @@ check("every way out of the spectrum lifts the freeze", () => {
     "and stopping altogether")
 })
 
-check("the strip is asked its length once, per host, as data", () => {
-  const command = wledInfoCommand(["led.local", "$(touch /tmp/pwned)"])
-  assert.strictEqual(command[0], "sh")
-  assert.ok(command[2].indexOf("/json/info") > 0)
-  assert.ok(command[2].indexOf("-m 2") > 0, "a light that does not answer is not waited on")
-  assert.strictEqual(command[command.length - 1], "$(touch /tmp/pwned)",
-    "hosts are arguments, never script")
-  assert.strictEqual(command[2].indexOf("touch"), -1)
+const siLine = (host, body) => host + "\t" + JSON.stringify(body)
+const si = (seg, count) => ({
+  state: { seg: seg === null ? [] : [seg] },
+  info: { leds: { count: count === undefined ? 144 : count } }
+})
+
+check("the strip is asked what it is once, per host, as data", () => {
+  for (const command of [wledInfoCommand(["led.local", "$(touch /tmp/pwned)"]),
+                         wledFxDataCommand(["led.local", "$(touch /tmp/pwned)"])]) {
+    assert.strictEqual(command[0], "sh")
+    assert.ok(command[2].indexOf("-m 3") > 0, "a light that does not answer is not waited on")
+    assert.strictEqual(command[command.length - 1], "$(touch /tmp/pwned)",
+      "hosts are arguments, never script")
+    assert.strictEqual(command[2].indexOf("touch"), -1)
+  }
+  assert.ok(wledInfoCommand([])[2].indexOf("/json/si") > 0,
+    "state and info in one request: the bridge needs both")
+  assert.ok(wledFxDataCommand([])[2].indexOf("/json/fxdata") > 0)
+
+  // The board truncates the big one: 9205 bytes ten times in twelve and 5514
+  // twice, cut off mid-array. Half a JSON document does not parse, and this
+  // is asked once per effect change, so one short answer left `params` with
+  // no knobs until the effect changed again.
+  assert.ok(wledFxDataCommand([])[2].indexOf('*"]"') > 0,
+    "a complete array ends with its own closer; a truncated one does not")
+  assert.ok(wledInfoCommand([])[2].indexOf('*"}"') > 0)
+  for (const command of [wledInfoCommand([]), wledFxDataCommand([])]) {
+    assert.ok(command[2].indexOf("while") > 0, "and a short answer is asked again")
+  }
 })
 
 check("an answer that is not a strip is not believed", () => {
-  assert.deepStrictEqual(parseWledInfo("led.local\t{\"leds\":{\"count\":144}}"),
-    { host: "led.local", count: 144 })
+  const answer = parseWledInfo(siLine("led.local", si({ start: 0, stop: 144, fx: 188 })))
+  assert.strictEqual(answer.host, "led.local")
+  assert.strictEqual(answer.count, 144)
+  assert.strictEqual(answer.fx, 188)
   assert.strictEqual(parseWledInfo("led.local\t"), null, "no answer at all")
   assert.strictEqual(parseWledInfo("led.local\tnot json"), null)
   assert.strictEqual(parseWledInfo("led.local\t{}"), null, "no length, no painting")
   assert.strictEqual(parseWledInfo("no tab here"), null)
   assert.strictEqual(parseWledInfo(""), null)
+})
+
+check("the segmented cap grows from the base edge like every other cap", () => {
+  // The bug: the segmented column counted blocks up from the floor and never
+  // read `base`, so `top` and `mirror` looked like settings that did nothing
+  // while `flat` and `round` honoured them through barGeometry.
+  const unit = 10, gap = 2, height = 100
+
+  const bottom = [0, 1, 2].map(i => segmentGeometry("bottom", i, 8, unit, gap, height))
+  assert.deepStrictEqual(bottom.map(g => g.y), [90, 78, 66], "off the floor, upward")
+
+  const top = [0, 1, 2].map(i => segmentGeometry("top", i, 8, unit, gap, height))
+  assert.deepStrictEqual(top.map(g => g.y), [0, 12, 24], "off the ceiling, downward")
+  assert.deepStrictEqual(top.map(g => g.step), [0, 1, 2], "and lit in the same order")
+
+  // Mirror is two columns off the middle, so it needs twice the blocks and
+  // half the room, and the second half counts its steps from the centre again.
+  assert.strictEqual(segmentCount("mirror", 8), 16)
+  assert.strictEqual(segmentCount("bottom", 8), 8)
+  assert.strictEqual(segmentSpan("mirror", 100), 50)
+  assert.strictEqual(segmentSpan("top", 100), 100)
+
+  const up = [0, 1].map(i => segmentGeometry("mirror", i, 8, unit, gap, height))
+  const down = [8, 9].map(i => segmentGeometry("mirror", i, 8, unit, gap, height))
+  assert.deepStrictEqual(up.map(g => g.y), [40, 28], "above the middle, rising")
+  assert.deepStrictEqual(down.map(g => g.y), [50, 62], "below it, falling")
+  assert.deepStrictEqual(down.map(g => g.step), [0, 1],
+    "the mirrored half lights with its twin, not after every block on the other side")
+})
+
+check("a matrix is measured in two directions, a strip in one", () => {
+  // The bug: a 32x24 panel whose segment 0 reads `start 0, stop 32`. On a
+  // strip that subtraction is the pixel count; on a matrix it is the WIDTH,
+  // so the bridge sized a 768-pixel panel at 32 and every band but the first
+  // fell off the end. info.leds.count is no better -- that light counts 1344
+  // LEDs behind the panel.
+  const panel = parseWledInfo(siLine("led.local", {
+    state: { seg: [{ start: 0, stop: 32, startY: 0, stopY: 24, fx: 188 }] },
+    info: { leds: { count: 1344, matrix: { w: 32, h: 24 } } }
+  }))
+  assert.strictEqual(panel.matrix, true)
+  assert.strictEqual(panel.width, 32)
+  assert.strictEqual(panel.height, 24)
+  assert.strictEqual(panel.count, 768, "not 32, and not 1344")
+
+  const strip = parseWledInfo(siLine("led.local", si({ start: 0, stop: 49 }, 49)))
+  assert.strictEqual(strip.matrix, false)
+  assert.strictEqual(strip.height, 1, "one row, so width is the whole answer")
+  assert.strictEqual(strip.count, 49)
+
+  // Half a panel is still a panel.
+  const half = parseWledInfo(siLine("led.local", {
+    state: { seg: [{ start: 8, stop: 24, startY: 0, stopY: 12 }] },
+    info: { leds: { count: 768, matrix: { w: 32, h: 24 } } }
+  }))
+  assert.deepStrictEqual([half.width, half.height, half.count], [16, 12, 192])
+})
+
+check("the segment bounds the paint, not the strip", () => {
+  // The bug: a Gledopto reporting 1344 LEDs whose segment 0 stops at 32. The
+  // `i` indices are relative to the segment and WLED drops the ones past its
+  // end, so every band but the first fell off and 32 LEDs showed one colour.
+  assert.strictEqual(
+    parseWledInfo(siLine("led.local", si({ start: 0, stop: 32, fx: 1 }, 1344))).count, 32)
+  assert.strictEqual(
+    parseWledInfo(siLine("led.local", si(null, 60))).count, 60,
+    "no segment to ask, so the strip is the answer")
+  assert.strictEqual(
+    parseWledInfo(siLine("led.local", si({ start: 0, stop: 900 }, 60))).count, 60,
+    "and a segment claiming more than the strip has is not believed either")
+})
+
+check("only the running effect's slider layout is kept", () => {
+  const table = ["Speed,Intensity", "", "Cooling,Spark rate,,2D Blur,Boost"]
+  const line = "led.local\t" + JSON.stringify(table)
+  assert.deepStrictEqual(parseWledFxData(line, { "led.local": 2 }),
+    { host: "led.local", meta: "Cooling,Spark rate,,2D Blur,Boost" })
+  assert.strictEqual(parseWledFxData(line, { "led.local": 99 }), null,
+    "an effect the firmware does not have")
+  assert.strictEqual(parseWledFxData(line, {}), null, "nothing known about this host yet")
+  assert.strictEqual(parseWledFxData("led.local\t{}", { "led.local": 0 }), null)
+  assert.strictEqual(parseWledFxData("no tab here", {}), null)
 })
 
 check("a light shows as whatever its owner called it", () => {
