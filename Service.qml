@@ -34,6 +34,7 @@ Item {
   property bool wledRestore: true
   property int wledSpan: 40
   property string wledKnob: ""
+  property string wledFlip: ""
 
   // ------------------------------------------------------------ language
   //
@@ -130,6 +131,8 @@ Item {
     wledRestore = settings.wledRestore !== false
     wledSpan = Math.max(0, Math.min(100, Number(settings.wledSpan) || 0))
     wledKnob = String(settings.wledKnob || "")
+    var wantedFlip = String(settings.wledFlip || "")
+    wledFlip = Vis.WLED_FLIPS.indexOf(wantedFlip) >= 0 ? wantedFlip : ""
 
     if (restart) writeConfig()
   }
@@ -555,7 +558,10 @@ Item {
           width: found.width,
           height: found.height,
           canStream: Vis.wledCanStream(found, found.seg),
-          start: Vis.wledStreamStart(found, found.seg)
+          start: Vis.wledStreamStart(found, found.seg),
+          // What the controller drives, which on a panel with other strips
+          // hanging off it is not what gets painted.
+          total: found.total
         }
         root.wledShapes = shapes
 
@@ -647,6 +653,10 @@ Item {
   // Per host: two panels of different sizes draw at different rates, and one
   // clock for both would pace them by whichever is slower.
   property var lastStreamedMs: ({})
+  // When each light last had something to show. A dark picture keeps being
+  // sent for a while after that, because letting go the moment the music dips
+  // means the light flips into its own effect and back on every quiet bar.
+  property var lastLitMs: ({})
   property bool wledTouched: false
 
   function pushToWled() {
@@ -677,20 +687,30 @@ Item {
           // that knows a frame is waiting for it.
           if (!wledStream.running) { wledStream.running = true; continue }
 
-          // Paced by the panel, not by the JSON cap and not by cava. Its own
-          // fps is the only number here that describes the thing being fed.
+          // Paced by what actually goes on the wire, which is the whole
+          // strip: the blanking is packets too.
           if (!Vis.wledStreamDue(lastStreamedMs[host] || 0, now,
-                shape.width * shape.height)) continue
+                shape.total, wledRateHz)) continue
           lastStreamedMs[host] = now
 
           var hex = Vis.wledPanelFrame(frame, paletteName, paletteContext,
-            shape.width, shape.height, fillStyle, wledStyle)
-          // An empty answer is silence, not black: stop writing and the panel
+            shape.width, shape.height, fillStyle, wledStyle, wledFlip)
+          // An empty answer is silence, not black: stop writing and the light
           // goes back to its own effect on the realtime timeout. Falling
           // through here would paint over it with a different style instead.
+          // No `wledTouched` here, and that is the whole point of the
+          // transport: streaming does not change anything about the light, so
+          // there is nothing to hand back. The packets stop and it returns to
+          // its own effect on the realtime timeout.
+          //
+          // Marking it touched meant every pause ran the JSON restore, which
+          // writes the recorded baseline — and a baseline recorded while the
+          // light happened to be on Solid paints it that colour. That is the
+          // "runs for a moment, stalls, turns blue": the guard flapping, and
+          // each flap repainting the light with an old snapshot.
           if (hex) {
-            wledStream.write(Vis.wledStreamLine(host, shape.start, hex))
-            wledTouched = true
+            wledStream.write(Vis.wledStreamLine(host,
+              Vis.wledStreamFrame(hex, shape.start, shape.total)))
           }
           continue
         }

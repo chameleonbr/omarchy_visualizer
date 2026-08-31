@@ -559,7 +559,8 @@ var DEFAULTS = {
   wledDevices: "",
   wledRestore: true,
   wledSpan: 40,
-  wledKnob: ""
+  wledKnob: "",
+  wledFlip: ""
 }
 
 // Later sources win, and an absent key never overrides a present one — a file
@@ -1130,7 +1131,21 @@ function parseWledInfo(line) {
   var fx = seg ? Number(seg.fx) : NaN
   return {
     host: host,
+    // What gets painted, and how far a realtime frame is allowed to reach.
+    //
+    // On a STRIP they differ: the segment may be a slice of a longer run, and
+    // every LED outside it still has to be written or it freezes holding
+    // whatever an effect last left there.
+    //
+    // On a MATRIX they are the same, and that is not a shortcut. WLED maps a
+    // realtime index row-major over the panel, so an index past width x height
+    // belongs nowhere — writing there is what turned the picture blue and
+    // stuck. The other outputs on that controller drive 576 LEDs that DNRGB
+    // simply cannot reach; they are not in a segment either, so nothing else
+    // lights them.
     count: shape.width * shape.height,
+    total: shape.height > 1
+      ? shape.width * shape.height : Math.floor(count),
     width: shape.width,
     height: shape.height,
     matrix: shape.height > 1,
@@ -1366,11 +1381,39 @@ function wledCanStream(shape, seg) {
   return start === 0 && startY === 0
 }
 
-// Where in the strip the frame is written. Zero for a panel, which is the only
-// place it is allowed to be.
+// Where in the strip the painted region begins. Zero for a panel, which is the
+// only place it is allowed to be.
 function wledStreamStart(shape, seg) {
   if (!shape || shape.matrix) return 0
   return Math.max(0, Math.floor(Number((seg || {}).start) || 0))
+}
+
+// A realtime frame is the whole strip, not the part of it worth looking at.
+//
+// A DNRGB packet overrides the controller's own output, and every LED it does
+// not carry keeps whatever was in the buffer — frozen, because effects do not
+// run while realtime is on. That light drives 1344 LEDs across three outputs
+// and only 768 of them are the panel, so the other 576 sat holding the last
+// colour an effect left on them for as long as the music played, and no amount
+// of turning the light off touched them.
+//
+// ponytail: this costs a packet. 1344 pixels is three where 768 was two, which
+// is 16 frames a second instead of 25 inside the budget. Sending the blanking
+// only on the first frame of a realtime session would buy that back, and would
+// lose it for the whole session to one dropped packet. Not worth it.
+function wledStreamFrame(hex, start, total) {
+  var painted = String(hex || "")
+  if (!painted) return ""
+  var pixels = painted.length / 6
+  var strip = Math.max(pixels, Math.floor(Number(total) || 0))
+  var before = clamp(Math.floor(Number(start) || 0), 0, strip - pixels)
+  var after = strip - before - pixels
+
+  var out = ""
+  for (var i = 0; i < before; i++) out += "000000"
+  out += painted
+  for (var j = 0; j < after; j++) out += "000000"
+  return out
 }
 
 // Row-major, y=0 at the top, which is how WLED indexes a panel and therefore
@@ -1395,7 +1438,24 @@ function isWledPanelStyle(style) {
   return WLED_PANEL_STYLES.indexOf(String(style || "")) >= 0
 }
 
-function wledPanelFrame(frame, palette, ctx, width, height, fill, style) {
+// Which way up the panel is.
+//
+// The wiring decides, not the plugin: WLED's own matrix config on one panel
+// here has three sub-panels with `b` (bottom-start) and `r` (right-start) set
+// on two of the three, and a realtime frame goes in by index without passing
+// through any of that. So the picture arrives however the wire runs, and the
+// only honest answer is a knob.
+var WLED_FLIPS = ["", "v", "h", "vh"]
+
+function wledFlipIndex(x, y, cols, rows, flip) {
+  var mode = String(flip || "")
+  return {
+    x: mode.indexOf("h") >= 0 ? cols - 1 - x : x,
+    y: mode.indexOf("v") >= 0 ? rows - 1 - y : y
+  }
+}
+
+function wledPanelFrame(frame, palette, ctx, width, height, fill, style, flip) {
   var bands = (frame || []).length
   var cols = Math.floor(width) || 0
   var rows = Math.floor(height) || 0
@@ -1414,10 +1474,10 @@ function wledPanelFrame(frame, palette, ctx, width, height, fill, style) {
   // or off. On a panel the height is the whole point.
   var standing = style === "bars" && rows > 1
 
+
   var tops = []
   var pairs = []
   var flats = []
-  var lit = false
   for (var x = 0; x < cols; x++) {
     // The same fold the strip uses, over the width instead of over the wire:
     // one band per column, and `mirror` puts the low bands in the middle.
@@ -1427,9 +1487,7 @@ function wledPanelFrame(frame, palette, ctx, width, height, fill, style) {
     // A full column carries its value in brightness, so it is lit whenever the
     // strip version would be — down to the floor, never to black, or a quiet
     // band takes its stretch of the panel out of the picture entirely.
-    var top = standing ? Math.round(value / FRAME_MAX * rows) : rows
-    if (top > 0) lit = true
-    tops.push(top)
+    tops.push(standing ? Math.round(value / FRAME_MAX * rows) : rows)
 
     if (standing) {
       // Exactly the branch Spectrum.qml takes: `solid` is one colour up the
@@ -1447,16 +1505,16 @@ function wledPanelFrame(frame, palette, ctx, width, height, fill, style) {
       WLED_FLOOR + (1 - WLED_FLOOR) * (value / FRAME_MAX))))
   }
 
-  // A frame with nothing in it is not a frame of black — it is no frame. A
-  // realtime packet holds the light in realtime for as long as they keep
-  // coming, so streaming silence pins a dark panel instead of handing it back.
-  // Sending nothing lets the timeout do what it is there for.
-  if (!lit) return ""
-
   var out = ""
   for (var y = 0; y < rows; y++) {
-    var fromBottom = rows - 1 - y
-    for (var col = 0; col < cols; col++) {
+    for (var x = 0; x < cols; x++) {
+      // The flip is applied to the pixel being asked about, not to the
+      // picture afterwards: the frame still goes out row-major, and the only
+      // thing that changes is which part of the drawing lands where.
+      var at = wledFlipIndex(x, y, cols, rows, flip)
+      var col = at.x
+      var fromBottom = rows - 1 - at.y
+
       var top = tops[col]
       if (top <= fromBottom) { out += "000000"; continue }
       var pair = pairs[col]
@@ -1496,27 +1554,71 @@ function wledPanelFrame(frame, palette, ctx, width, height, fill, style) {
 // ponytail: one budget for every board. An ESP8266 is slower than an ESP32 and
 // would want its own; the upgrade is to find the knee per host by watching how
 // long that light takes to answer, which is what the table above did by hand.
-var WLED_PACKET_BUDGET = 50
+// Measured two ways, and they disagreed. Sweeping the rate and watching how
+// long an unrelated HTTP request took said flat to fifty packets a second and
+// a cliff past it — but that measures how loaded the board is, not whether it
+// is consuming what arrives. Under realtime the same board reports rendering
+// 37 frames a second, and packets past that pile up in its receive queue: what
+// it drops is what arrived last, which on a bar chart is the half the bars
+// stand on. They freeze while the mostly-dark top keeps moving.
+//
+// So the budget is not the load ceiling. Sweeping the rate again and measuring
+// what the light DROPS — pinging it while streaming — put the wall lower still
+// and made it sharp:
+//
+//      4 fps    8 packets/s     6% lost
+//      8 fps   16 packets/s     0%
+//     12 fps   24 packets/s     0%
+//     15 fps   30 packets/s    44% lost, and 3.9s round trips
+//
+// A frame is two packets there, and losing one of a pair freezes half the
+// picture rather than skipping a frame — on a bar chart, the half the bars
+// stand on. That is what "it keeps freezing" was, and it is a link, not a
+// program: that light answers a ping in 700ms to 1.6s with nothing running,
+// where the three strips beside it answer normally.
+//
+// `wledRateHz` caps the stream as well, which is what that setting already
+// says it does and is the knob for a light on a worse link than this one.
+var WLED_PACKET_BUDGET = 24
 var WLED_PACKET_PIXELS = 489
 
 function wledStreamPackets(pixels) {
   return Math.max(1, Math.ceil((Number(pixels) || 0) / WLED_PACKET_PIXELS))
 }
 
-function wledStreamFps(pixels) {
-  return WLED_PACKET_BUDGET / wledStreamPackets(pixels)
+function wledStreamFps(pixels, rateHz) {
+  var budget = WLED_PACKET_BUDGET / wledStreamPackets(pixels)
+  var asked = Number(rateHz)
+  return asked > 0 ? Math.min(budget, asked) : budget
 }
 
-function wledStreamDue(lastSentMs, nowMs, pixels) {
-  return (nowMs - lastSentMs) >= (1000 / wledStreamFps(pixels))
+function wledStreamDue(lastSentMs, nowMs, pixels, rateHz) {
+  return (nowMs - lastSentMs) >= (1000 / wledStreamFps(pixels, rateHz))
+}
+
+// How long a dark picture keeps being sent before the light is let go.
+//
+// A realtime packet holds the light in realtime for as long as they keep
+// coming, so the alternative — stop sending the moment the picture goes dark —
+// hands the light back within the packet timeout, which is two seconds. Music
+// has quiet passages shorter than that, and the light spent them flipping into
+// its own effect and back out again. Fifteen seconds of nothing is a song that
+// ended; two is a bar rest.
+var WLED_STREAM_HOLD_MS = 15000
+
+function wledFrameIsDark(hex) {
+  var text = String(hex || "")
+  for (var i = 0; i < text.length; i++) {
+    if (text[i] !== "0") return false
+  }
+  return true
 }
 
 // One line per frame, and the host travels as data on that line rather than
 // in the command: it comes out of another plugin's config file and is not
 // this one's to trust.
-function wledStreamLine(host, start, hex) {
-  return String(host) + "\t" + (Math.max(0, Math.floor(Number(start) || 0)))
-    + "\t" + String(hex) + "\n"
+function wledStreamLine(host, hex) {
+  return String(host) + "\t" + String(hex) + "\n"
 }
 
 // What `params` sends when the effect on the light has no knob worth driving.
@@ -1609,6 +1711,10 @@ var WLED_ROWS = [
   // it stays on screen either way: a row that comes and goes with a sibling
   // setting is a row nobody can find twice.
   { key: "wledSpan", accel: "x", values: [20, 40, 60, 80] },
+  // Which way up a panel is. The wiring decides and a realtime frame goes in
+  // by index without passing through WLED's matrix config, so this is a knob
+  // rather than something to work out.
+  { key: "wledFlip", accel: "y", values: WLED_FLIPS },
   { key: "wledRestore", accel: "o", values: [false, true] }
 ]
 

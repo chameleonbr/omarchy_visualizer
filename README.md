@@ -212,7 +212,29 @@ own effect on the realtime timeout. It also lifts the rate: over HTTP a light
 answered a POST in about 150ms, and a strip of fifty LEDs is one packet, so it
 gets fifty frames a second inside the packet budget instead of `wledRateHz`.
 
-`wledRateHz` still caps `solid`, which is not painting — it writes `fx`, `pal`
+On a strip the frame is the whole run, not just the segment: a realtime packet
+overrides the controller's output, so an LED left out of it keeps whatever was
+in the buffer and freezes there. On a panel it stops at the panel — WLED maps
+a realtime index row-major over the matrix, and anything past width × height
+belongs nowhere. A controller with a panel on one output and other strips on
+the others cannot have those strips reached by DNRGB at all.
+
+A dark picture is still sent. The realtime timeout is two seconds, so letting
+go the moment the music dips hands the light back inside a bar rest — it spent
+every quiet passage flipping into its own effect and out again. Fifteen seconds
+of nothing is a song that ended; anything shorter is a rest, and the panel just
+goes dark for it.
+
+Which way up a panel ends up is the wiring's business, not the plugin's: a
+realtime frame goes in by index and never passes through WLED's own matrix
+config, which can have sub-panels wired bottom-start or right-start. `flip`
+turns the picture over — `v`, `h`, or both — until it matches the panel.
+
+`wledRateHz` caps both transports. The packet budget is the automatic safety —
+a board renders around 37 frames a second and packets past that pile up in its
+receive queue, and what it drops is what arrived last, which on a bar chart is
+the half the bars stand on. `wledRateHz` is the knob for a light that still
+misbehaves. It is also the only pacing `solid` has, which is not painting — it writes `fx`, `pal`
 and `col`, and a realtime packet cannot carry those.
 
 **`params` leaves the effect running.** Every other mode takes the strip away
@@ -304,11 +326,12 @@ Everything is in the widget's settings screen. The ones worth knowing:
 | `framerate` | 30 | the cost knob |
 | `pauseWhenSilent` · `pauseOnBattery` | on | the two guards |
 | `wledEnabled` | off | mirror onto the lights |
-| `wledRateHz` | 10 | how fast the lamp is asked to follow over HTTP |
+| `wledRateHz` | 10 | how fast the light is asked to follow, over either transport |
 | `wledDevices` | all | narrow the bridge to one light |
 | `wledStyle` | `spectrum` | how the light is driven |
 | `wledSpan` | 40 | `params`: how far a knob may swing from your own setting, in percent |
 | `wledKnob` | auto | `params`: name one slider to drive, instead of letting it choose |
+| `wledFlip` | as wired | turn a matrix over: `v`, `h` or `vh` |
 
 ## Development
 
@@ -351,6 +374,7 @@ colour inside its own label:
 | `l` | fall | `a` | bars |
 | | | `x` | knob swing |
 | | | `k` | driven knob |
+| | | `y` | panel side up |
 
 The last five are only there when the WLED plugin's config names a light, and
 so are their letters: on a machine with no lights `d` does nothing rather than

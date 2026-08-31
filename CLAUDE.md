@@ -116,10 +116,48 @@ as JSON is ~4KB that a 32x24 panel answers in 150ms.
   JSON because they write segment STATE (`fx`, `pal`, `col`, the sliders),
   which a realtime packet cannot carry.
 
+- **A realtime frame reaches exactly as far as the light can be addressed,
+  and that is not the same number on a strip and on a panel.** A DNRGB packet
+  overrides the controller's output, so on a STRIP every LED outside the
+  segment still has to be written or it freezes holding what an effect left
+  there. On a MATRIX the index is mapped row-major over the panel, so anything
+  past width x height belongs nowhere: padding a 768-pixel panel out to the
+  controller's 1344 LEDs put the picture on the floor — stuck, and blue.
+  `parseWledInfo` returns `count` (painted) and `total` (addressable), and
+  they are equal on a panel deliberately. The other 576 LEDs on that
+  controller cannot be reached by DNRGB at all, and are in no segment either.
+
+- **Which way up a panel is, is the wiring's business.** WLED's matrix config
+  on the one here has two of three sub-panels wired bottom-start and
+  right-start, and a realtime frame goes in by index without passing through
+  any of it. The picture arrives however the wire runs, so `wledFlip` is a
+  setting rather than something to work out.
+
+- **A quiet bar is not the end of the song.** The packet timeout is two
+  seconds, so stopping the stream the moment the picture goes dark hands the
+  light back inside a bar rest — it flipped into its own effect and out again
+  on every quiet passage. A dark picture keeps being SENT for
+  `WLED_STREAM_HOLD_MS`, and only silence longer than that lets the light go.
+  Fifteen seconds is a song that ended.
+
+- **Streaming does not touch the light, so it must not set `wledTouched`.**
+  It did, and every pause therefore ran the JSON restore, which writes the
+  recorded baseline — a baseline recorded while the light happened to be on
+  Solid paints it that colour. That was the "runs for a moment, stalls, turns
+  blue": the guards flapping, each flap repainting the light from an old
+  snapshot. Only `send()` dirties a light; the packets stopping is the whole
+  restore for a stream.
+
 - **Realtime is paced in packets, not frames.** DNRGB carries 489 pixels.
   `info.leds.fps` looks like the number to pace by and is not — it reports 30
   under one effect and 70 under another, and under realtime it just echoes what
-  it is being fed, so pacing on it is a loop measuring itself.
+  it is being fed, so pacing on it is a loop measuring itself. The budget was
+  50 first, taken from an HTTP-latency sweep, and that measures how LOADED the
+  board is rather than whether it is consuming what arrives: under realtime it
+  renders around 37 a second, packets past that pile up, and what gets dropped
+  is what arrived last — the second packet of a two-packet frame, which on a
+  bar chart is the half the bars stand on. `wledRateHz` caps the stream too,
+  which is the knob for a light that still misbehaves.
 
 - **Do not bind `Process.running` for a process that can exit.** The exit
   writes `running`, which breaks the binding, so it never restarts. The DNRGB

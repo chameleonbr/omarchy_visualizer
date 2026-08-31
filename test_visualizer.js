@@ -1120,6 +1120,39 @@ check("the effect keeps running while the audio moves its knobs", () => {
     { id: 0, ix: 128, c1: 110, c2: 50, c3: 31 }, "no span, no movement")
 })
 
+check("a panel can be turned over, because the wiring decides which way is up", () => {
+  const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
+    urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
+  // A realtime frame goes in by index and never passes through WLED's own
+  // matrix config, which on one panel here has two of three sub-panels wired
+  // bottom-start and right-start. So the picture arrives however the wire
+  // runs, and the only honest answer is a knob.
+  const px = (hex, x, y) => hex.slice((y * 2 + x) * 6, (y * 2 + x) * 6 + 6)
+  // Half height, or a bar that fills the panel hides the flip entirely.
+  const args = [[60, 0], "rainbow", ctx, 2, 2, "solid", "bars"]
+
+  const plain = wledPanelFrame(...args, "")
+  assert.strictEqual(px(plain, 1, 0), "000000", "silent band, nothing anywhere")
+  assert.strictEqual(px(plain, 0, 0), "000000", "and the loud one only reaches halfway")
+  assert.notStrictEqual(px(plain, 0, 1), "000000", "standing on the floor")
+
+  const vertical = wledPanelFrame(...args, "v")
+  assert.notStrictEqual(px(vertical, 0, 0), "000000", "now it hangs from the ceiling")
+  assert.strictEqual(px(vertical, 0, 1), "000000")
+
+  const horizontal = wledPanelFrame(...args, "h")
+  assert.strictEqual(px(horizontal, 0, 1), "000000", "the loud band moved to the right")
+  assert.notStrictEqual(px(horizontal, 1, 1), "000000")
+  assert.strictEqual(px(horizontal, 1, 0), "000000", "still only halfway up")
+
+  const both = wledPanelFrame(...args, "vh")
+  assert.strictEqual(px(both, 1, 0), px(plain, 0, 1), "turned right over")
+  assert.strictEqual(wledPanelFrame(...args, "nonsense"), plain, "an unknown flip is none")
+
+  assert.deepStrictEqual(wledFlipIndex(0, 0, 4, 3, ""), { x: 0, y: 0 })
+  assert.deepStrictEqual(wledFlipIndex(0, 0, 4, 3, "vh"), { x: 3, y: 2 })
+})
+
 check("a panel gets bars, one column per band, standing on the floor", () => {
   const ctx = { accent: { r: 0, g: 1, b: 0.5 }, foreground: { r: 1, g: 1, b: 1 },
     urgent: { r: 1, g: 0, b: 0 }, peakThreshold: 85 }
@@ -1143,12 +1176,15 @@ check("a panel gets bars, one column per band, standing on the floor", () => {
   const rows = [0, 1, 2, 3].map(y => half.slice(y * 6, y * 6 + 6))
   assert.deepStrictEqual(rows.map(c => c !== "000000"), [false, false, true, true])
 
-  // Silence is no frame at all, not a frame of black: realtime packets hold
-  // the light in realtime for as long as they arrive, so streaming black
-  // would pin a dark panel instead of letting it go back to its effect.
-  assert.strictEqual(wledPanelFrame([0, 0], "rainbow", ctx, 4, 4, "solid", "bars"), "")
-  assert.notStrictEqual(wledPanelFrame([5, 0], "rainbow", ctx, 4, 24, "solid", "bars"), "",
-    "but one band barely moving is still something to draw")
+  // Dark is still a picture, and it is still sent. Stopping the moment it
+  // goes dark hands the light back within the packet timeout, which is two
+  // seconds -- shorter than a quiet passage, so the light spent them flipping
+  // into its own effect and out again.
+  const dark = wledPanelFrame([0, 0], "rainbow", ctx, 4, 4, "solid", "bars")
+  assert.strictEqual(dark, "000000".repeat(16), "a full frame of black, not nothing")
+  assert.strictEqual(wledFrameIsDark(dark), true)
+  assert.strictEqual(wledFrameIsDark(hex), false, "and a lit one is not")
+  assert.strictEqual(wledFrameIsDark(""), true, "nothing to show is dark too")
   assert.strictEqual(wledPanelFrame([], "rainbow", ctx, 4, 4, "solid", "bars"), "")
   assert.strictEqual(wledPanelFrame([100], "rainbow", ctx, 0, 4, "solid", "bars"), "")
   assert.strictEqual(wledPanelFrame(null, "rainbow", ctx, 4, 4, "solid", "bars"), "")
@@ -1269,23 +1305,56 @@ check("a light is fed in packets, not in frames", () => {
 
   // The budget is packets a second, so the frame rate a light gets is that
   // budget divided by what one frame costs it.
-  assert.strictEqual(wledStreamFps(400), 50, "one packet, so the whole budget")
-  assert.strictEqual(wledStreamFps(768), 25, "two packets, so half of it")
-  assert.strictEqual(wledStreamFps(2000), 10)
+  assert.strictEqual(wledStreamFps(400, 0), 24, "one packet, so the whole budget")
+  assert.strictEqual(wledStreamFps(768, 0), 12, "two packets, so half of it")
+  assert.strictEqual(wledStreamFps(2000, 0), 4.8)
 
-  assert.strictEqual(wledStreamDue(0, 19, 400), false, "19ms is not quite 1/50")
-  assert.strictEqual(wledStreamDue(0, 20, 400), true)
-  assert.strictEqual(wledStreamDue(0, 20, 768), false, "the panel waits twice as long")
-  assert.strictEqual(wledStreamDue(0, 40, 768), true)
+  // wledRateHz caps it as well: the knob for a light that still misbehaves,
+  // and what that setting already claims to do.
+  assert.strictEqual(wledStreamFps(400, 10), 10, "asked for less, gets less")
+  assert.strictEqual(wledStreamFps(768, 20), 12, "asked for more than it can take")
+
+  assert.strictEqual(wledStreamDue(0, 41, 400, 0), false, "41ms is not quite 1/24")
+  assert.strictEqual(wledStreamDue(0, 42, 400, 0), true)
+  assert.strictEqual(wledStreamDue(0, 42, 768, 0), false, "the panel waits twice as long")
+  assert.strictEqual(wledStreamDue(0, 84, 768, 0), true)
+})
+
+check("a realtime frame is the whole strip, not the part worth looking at", () => {
+  // A DNRGB packet overrides the controller's output, and every LED it does
+  // not carry keeps what was in the buffer -- frozen, because effects do not
+  // run while realtime is on. That panel drives 1344 LEDs across three outputs
+  // and only 768 are the matrix, so 576 sat holding the last colour an effect
+  // left on them for as long as the music played, and turning the light off
+  // did not touch them.
+  assert.strictEqual(wledStreamFrame("FF0000", 0, 3), "FF0000" + "000000".repeat(2))
+  assert.strictEqual(wledStreamFrame("FF0000", 2, 4),
+    "000000".repeat(2) + "FF0000" + "000000", "a segment that starts late")
+  assert.strictEqual(wledStreamFrame("FF0000FF0000", 0, 2), "FF0000FF0000",
+    "nothing spare, nothing added")
+  assert.strictEqual(wledStreamFrame("FF0000", 0, 0), "FF0000",
+    "a light that never said how long it is is at least as long as its paint")
+  assert.strictEqual(wledStreamFrame("FF0000", 9, 2), "000000FF0000",
+    "an offset past the end is clamped rather than pushing the paint off it")
+  assert.strictEqual(wledStreamFrame("", 0, 100), "", "nothing in, nothing out")
+})
+
+check("a quiet bar is not the end of the song", () => {
+  // The packet timeout is two seconds, so stopping the moment the picture
+  // goes dark hands the light back inside a bar rest -- and it flipped into
+  // its own effect and out again on every quiet passage, which is what
+  // "unstable" was. Fifteen seconds of nothing is a song that ended.
+  assert.ok(WLED_STREAM_HOLD_MS >= 15000, "a song that ended, not a rest")
+  assert.strictEqual(wledFrameIsDark("000000000000"), true)
+  assert.strictEqual(wledFrameIsDark("000000000001"), false, "one blue channel is a picture")
+  assert.strictEqual(wledFrameIsDark("100000"), false)
 })
 
 check("the host travels as data, never as command", () => {
-  assert.strictEqual(wledStreamLine("led.local", 0, "FF0000"), "led.local\t0\tFF0000\n")
-  assert.strictEqual(wledStreamLine("led.local", 12, "FF0000"), "led.local\t12\tFF0000\n")
-  assert.strictEqual(wledStreamLine("a", -3, "00"), "a\t0\t00\n", "never behind the first LED")
+  assert.strictEqual(wledStreamLine("led.local", "FF0000"), "led.local\tFF0000\n")
   // One line per frame is what lets the streamer outlive the frames it drops,
   // and a tab is the one character neither a host nor a hex string contains.
-  assert.strictEqual(wledStreamLine("a", 0, "00").split("\n").length, 2)
+  assert.strictEqual(wledStreamLine("a", "00").split("\n").length, 2)
 })
 
 check("an effect with no knob to drive keeps its effect", () => {
@@ -1415,11 +1484,18 @@ check("a matrix is measured in two directions, a strip in one", () => {
   assert.strictEqual(panel.width, 32)
   assert.strictEqual(panel.height, 24)
   assert.strictEqual(panel.count, 768, "not 32, and not 1344")
+  // Not 1344. WLED maps a realtime index row-major over the panel, so an
+  // index past width x height belongs nowhere -- writing there is what turned
+  // the picture blue and stuck it. The 576 LEDs on that controller's other
+  // outputs cannot be reached by DNRGB at all.
+  assert.strictEqual(panel.total, 768, "a realtime frame stops at the panel")
 
   const strip = parseWledInfo(siLine("led.local", si({ start: 0, stop: 49 }, 49)))
+
   assert.strictEqual(strip.matrix, false)
   assert.strictEqual(strip.height, 1, "one row, so width is the whole answer")
   assert.strictEqual(strip.count, 49)
+  assert.strictEqual(strip.total, 49, "a strip's whole run, segment or not")
 
   // Half a panel is still a panel.
   const half = parseWledInfo(siLine("led.local", {

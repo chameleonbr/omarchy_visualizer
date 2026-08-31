@@ -52,7 +52,8 @@
       "wledRestore": true,
       "wledStyle": "spectrum",
       "wledSpan": 40,
-      "wledKnob": ""
+      "wledKnob": "",
+      "wledFlip": ""
     },
     "schema": [
       {
@@ -280,6 +281,13 @@
         "label": "WLED mode",
         "description": "spectrum, mirror, solid, params to move the light's own effect sliders, or bars for a matrix panel.",
         "defaultValue": "spectrum"
+      },
+      {
+        "key": "wledFlip",
+        "type": "string",
+        "label": "WLED panel side up",
+        "description": "Turn a matrix over: empty, v, h, or vh. The wiring decides which one is right.",
+        "defaultValue": ""
       },
       {
         "key": "wledKnob",

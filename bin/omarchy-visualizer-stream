@@ -12,12 +12,12 @@ packets stop the light goes back to whatever effect it was running on its own
 
 Reads one frame per line on stdin:
 
-    <host>\t<start>\t<hex>
+    <host>\t<hex>
 
-where <hex> is RGB triples, one per pixel, and <start> is the LED index the
-first of them is written at — a strip's segment need not begin at zero, and
-DNRGB indexes the strip rather than the segment. Anything malformed is skipped
-rather than fatal: this process outlives every frame it drops.
+where <hex> is RGB triples, one per LED, for the WHOLE strip: a realtime
+packet overrides the controller's own output, so an LED left out of the frame
+keeps whatever was in the buffer rather than going dark. Anything malformed is
+skipped rather than fatal: this process outlives every frame it drops.
 """
 import socket, sys
 
@@ -49,27 +49,22 @@ def address_of(host):
     return addresses[host]
 
 for line in sys.stdin:
-    fields = line.strip().split("\t")
-    if len(fields) != 3:
-        continue
-    host, offset, payload = fields
-    if not host:
+    host, tab, payload = line.strip().partition("\t")
+    if not tab or not host:
         continue
     address = address_of(host)
     if not address:
         continue
     try:
-        first = int(offset)
         pixels = bytes.fromhex(payload)
     except ValueError:
         continue
-    if first < 0 or not pixels or len(pixels) % 3:
+    if not pixels or len(pixels) % 3:
         continue
 
     count = len(pixels) // 3
-    for at in range(0, count, PER_PACKET):
-        chunk = pixels[at * 3:(at + PER_PACKET) * 3]
-        start = first + at
+    for start in range(0, count, PER_PACKET):
+        chunk = pixels[start * 3:(start + PER_PACKET) * 3]
         header = bytes([DNRGB, TIMEOUT, (start >> 8) & 0xFF, start & 0xFF])
         try:
             sock.sendto(header + chunk, (address, PORT))

@@ -61,6 +61,7 @@ var STRINGS = {
     "row.wledRateHz": "wled rate",
     "row.wledSpan": "knob swing",
     "row.wledKnob": "driven knob",
+    "row.wledFlip": "panel side up",
     "row.wledRestore": "restore on stop",
 
     // The empty device setting is every light the config lists, so it says so
@@ -75,6 +76,13 @@ var STRINGS = {
     // Empty means the blocklist's guess. A named knob shows as the light's
     // own word for it, which is what the WLED app calls it too.
     "wledKnob.": "auto",
+
+    // Which way up a panel is wired. The axes are named rather than the
+    // directions: what is being turned over is the picture, not the panel.
+    "wledFlip.": "as wired",
+    "wledFlip.v": "top to bottom",
+    "wledFlip.h": "left to right",
+    "wledFlip.vh": "both",
 
     "wledStyle.spectrum": "spectrum",
     "wledStyle.mirror": "mirror",
@@ -156,6 +164,7 @@ var STRINGS = {
     "row.wledRateHz": "taxa wled",
     "row.wledSpan": "amplitude",
     "row.wledKnob": "knob usado",
+    "row.wledFlip": "lado do painel",
     "row.wledRestore": "restaurar ao parar",
 
     "micDevice.": "sistema",
@@ -163,6 +172,11 @@ var STRINGS = {
     "wledDevices.": "todos",
 
     "wledKnob.": "auto",
+
+    "wledFlip.": "como ligado",
+    "wledFlip.v": "de cima a baixo",
+    "wledFlip.h": "esquerda a direita",
+    "wledFlip.vh": "os dois",
 
     "wledStyle.spectrum": "espectro",
     "wledStyle.mirror": "espelho",
